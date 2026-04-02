@@ -65,8 +65,24 @@ def extract_excerpt(content: str) -> str:
             in_frontmatter = not in_frontmatter
             continue
         if not in_frontmatter and line.strip() and not line.startswith("#"):
-            return line[:140]
+            return line[:400]
     return ""
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove common markdown syntax for clean terminal display."""
+    import re
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)   # bold
+    text = re.sub(r"\*(.+?)\*", r"\1", text)         # italic
+    text = re.sub(r"`(.+?)`", r"\1", text)           # inline code
+    text = re.sub(r"^>\s*", "", text)                # blockquote
+    return text.strip()
+
+
+def _wrap(text: str, width: int, indent: str) -> str:
+    """Wrap text to width, prefixing every line with indent."""
+    import textwrap
+    return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
 
 
 @click.group()
@@ -221,14 +237,15 @@ def update(limit, since, repo):
 
 
 @cli.command()
-def index():
+@click.option("--force", is_flag=True, help="Re-index all records, ignoring existing cache.")
+def index(force):
     """Embed and index all knowledge records in this repo."""
     records = list(KNOWLEDGE_DIR.rglob("*.md"))
     if not records:
         click.echo("No knowledge records found. Is the GitHub Action installed?")
         return
 
-    existing = load_index()
+    existing = load_index() if not force else {}
     new_records = [r for r in records if str(r) not in existing]
 
     if not new_records:
@@ -279,8 +296,33 @@ def query(query, top):
     ]
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    click.echo(f"\nResults for: {query_text}\n" + "─" * 50)
-    for score, entry in scored[:top]:
-        click.echo(f"\n  {entry['title']}")
-        click.echo(f"  {entry['excerpt']}...")
-        click.echo(f"  {entry['path']}  (score {score:.2f})")
+    import shutil
+    term_width = min(shutil.get_terminal_size((80, 24)).columns, 100)
+    divider = "─" * term_width
+
+    click.echo(f"\nResults for: {query_text}")
+    click.echo(divider)
+
+    for i, (score, entry) in enumerate(scored[:top], 1):
+        title = entry["title"]
+        excerpt = _strip_markdown(entry["excerpt"])
+        path = entry["path"]
+
+        # Score badge: colour green above 0.8, yellow above 0.6, default below
+        score_str = f"{score:.2f}"
+        if score >= 0.8:
+            score_label = click.style(f"[{score_str}]", fg="green", bold=True)
+        elif score >= 0.6:
+            score_label = click.style(f"[{score_str}]", fg="yellow", bold=True)
+        else:
+            score_label = click.style(f"[{score_str}]", fg="white")
+
+        rank = click.style(f"#{i}", bold=True)
+        click.echo(f"\n  {rank}  {title}  {score_label}")
+
+        if excerpt:
+            click.echo(_wrap(excerpt, term_width - 6, "      "))
+
+        click.echo(f"      {click.style(path, dim=True)}")
+
+    click.echo("")
