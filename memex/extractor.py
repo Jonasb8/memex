@@ -2,16 +2,19 @@ import os
 import re
 from anthropic import Anthropic
 import instructor
+from .config import load_api_key
 from .schema import ExtractionResult, ConfidenceLevel
 
-# Patch the Anthropic client with Instructor for structured output
-client = instructor.from_anthropic(Anthropic())
+
+def _client():
+    """Lazily build the instructor-patched client so the key is resolved at call time."""
+    return instructor.from_anthropic(Anthropic(api_key=load_api_key()))
 
 DISCARD_THRESHOLD = 0.40
 
 # Patterns that indicate a low-signal PR — skip LLM call entirely
 LOW_SIGNAL_PATTERNS = [
-    r"^(chore|fix|style|docs|test|ci|build|refactor)(\(.+\))?: .{1,40}$",
+    r"^(chore|fix|style|docs|test|ci|build)(\(.+\))?: .{1,40}$",
     r"bump .+ from .+ to .+",
     r"update (dependencies|deps|packages|lockfile)",
     r"^(wip|WIP)[\s:]",
@@ -69,7 +72,7 @@ def extract(
         return None
 
     # Gate 2: LLM extraction with structured output
-    result: ExtractionResult = client.messages.create(
+    result: ExtractionResult = _client().messages.create(
         model="claude-sonnet-4-5",
         max_tokens=1024,
         messages=[
