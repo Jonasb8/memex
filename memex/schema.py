@@ -4,9 +4,9 @@ from enum import Enum
 
 
 class ConfidenceLevel(str, Enum):
-    high = "high"       # > 0.65 — publish
-    medium = "medium"   # 0.40–0.65 — publish with flag
-    low = "low"         # < 0.40 — discard
+    high = "high"       # >= 0.80 — publish
+    medium = "medium"   # 0.65–0.80 — publish with flag
+    low = "low"         # < 0.65 — discard
 
 
 class KnowledgeRecord(BaseModel):

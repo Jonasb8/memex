@@ -57,6 +57,16 @@ def extract_title(content: str) -> str:
     return "Unknown"
 
 
+def extract_confidence(content: str) -> float:
+    for line in content.splitlines():
+        if line.startswith("confidence:"):
+            try:
+                return float(line.replace("confidence:", "").strip())
+            except ValueError:
+                pass
+    return 1.0
+
+
 def extract_excerpt(content: str) -> str:
     """Pull first substantive paragraph after the frontmatter."""
     in_frontmatter = False
@@ -261,6 +271,7 @@ def index(force):
             "embedding": embedding,
             "title": extract_title(content),
             "excerpt": extract_excerpt(content),
+            "confidence": extract_confidence(content),
             "path": str(path),
         }
 
@@ -308,6 +319,15 @@ def query(query, top):
         excerpt = _strip_markdown(entry["excerpt"])
         path = entry["path"]
 
+        # Confidence from index (or read from file if legacy entry lacks it)
+        if "confidence" in entry:
+            confidence = entry["confidence"]
+        else:
+            try:
+                confidence = extract_confidence(Path(path).read_text())
+            except OSError:
+                confidence = 1.0
+
         # Score badge: colour green above 0.8, yellow above 0.6, default below
         score_str = f"{score:.2f}"
         if score >= 0.8:
@@ -320,7 +340,23 @@ def query(query, top):
         rank = click.style(f"#{i}", bold=True)
         click.echo(f"\n  {rank}  {title}  {score_label}")
 
-        if excerpt:
+        # Confidence label
+        if confidence >= 0.80:
+            conf_line = click.style("✅ High confidence", fg="green")
+            click.echo(f"      {conf_line}")
+        elif confidence >= 0.65:
+            conf_line = click.style("💡 Medium confidence", fg="yellow")
+            click.echo(f"      {conf_line}")
+        else:
+            conf_line = click.style(
+                "⚠️  Low confidence — limited rationale present in source. "
+                "Verify before relying on this record.",
+                fg="yellow",
+            )
+            click.echo(f"      {conf_line}")
+
+        # Excerpt — skip if it duplicates the low-confidence warning already shown
+        if excerpt and not excerpt.startswith("⚠️"):
             click.echo(_wrap(excerpt, term_width - 6, "      "))
 
         click.echo(f"      {click.style(path, dim=True)}")

@@ -94,8 +94,8 @@ def extract(
 
 
 def confidence_level(score: float) -> ConfidenceLevel:
-    if score >= 0.65:
+    if score >= 0.80:
         return ConfidenceLevel.high
-    if score >= 0.40:
+    if score >= 0.65:
         return ConfidenceLevel.medium
     return ConfidenceLevel.low
