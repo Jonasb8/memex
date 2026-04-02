@@ -1,15 +1,16 @@
 from datetime import date
 from pathlib import Path
+from typing import Optional
 from .schema import KnowledgeRecord, ConfidenceLevel
 from .extractor import confidence_level
 
 
 def render_markdown(
     record: KnowledgeRecord,
-    pr_url: str,
-    pr_author: str,
-    pr_number: int,
+    source_url: str,
+    author: str,
     repo: str,
+    pr_number: Optional[int] = None,
 ) -> str:
     """Render a KnowledgeRecord to the canonical Memex markdown format."""
     level = confidence_level(record.confidence)
@@ -36,13 +37,22 @@ def render_markdown(
         else "_None_"
     )
 
+    # pr: field only present for PR-sourced records
+    pr_line = f"pr: {pr_number}\n" if pr_number else ""
+
+    # Footer label adapts to source type
+    if pr_number:
+        footer = f"_Extracted by Memex from [PR #{pr_number}]({source_url}) · {date.today().isoformat()}_"
+    else:
+        short_sha = source_url.split("/")[-1][:8] if "/commit/" in source_url else source_url
+        footer = f"_Extracted by Memex from [commit {short_sha}]({source_url}) · {date.today().isoformat()}_"
+
     return f"""---
 title: "{record.title}"
 date: {date.today().isoformat()}
-author: "{pr_author}"
-source: "{pr_url}"
-pr: {pr_number}
-repo: "{repo}"
+author: "{author}"
+source: "{source_url}"
+{pr_line}repo: "{repo}"
 confidence: {record.confidence:.2f}
 tags: []
 ---
@@ -71,27 +81,26 @@ tags: []
 
 ---
 
-_Extracted by Memex from [PR #{pr_number}]({pr_url}) · {date.today().isoformat()}_
+{footer}
 """
 
 
 def write_record(
     record: KnowledgeRecord,
-    pr_url: str,
-    pr_author: str,
-    pr_number: int,
+    source_url: str,
+    author: str,
     repo: str,
+    pr_number: Optional[int] = None,
     output_dir: Path = Path("knowledge/decisions"),
 ) -> Path:
     """Write a rendered knowledge record to disk. Returns the file path."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Slug: date + sanitised title
     slug = record.title.lower()
     slug = "".join(c if c.isalnum() or c == " " else "" for c in slug)
     slug = "-".join(slug.split()[:8])
     filename = f"{date.today().isoformat()}-{slug}.md"
 
     path = output_dir / filename
-    path.write_text(render_markdown(record, pr_url, pr_author, pr_number, repo))
+    path.write_text(render_markdown(record, source_url, author, repo, pr_number))
     return path

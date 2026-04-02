@@ -167,6 +167,60 @@ def init(path, dry_run):
 
 
 @cli.command()
+@click.option("--limit", default=20, show_default=True,
+              help="Max commits to scan on first run (no prior state).")
+@click.option("--since", default=None, metavar="DATE",
+              help="Scan commits since this date, e.g. 2024-01-01. Overrides --limit.")
+@click.option("--repo", default=None, metavar="OWNER/REPO",
+              help="Override auto-detected GitHub repo.")
+def update(limit, since, repo):
+    """Pull new decisions from git history since last run.
+
+    Two commit tracks are processed automatically:
+
+    \b
+      PR merges:       message contains #N → fetches full PR context via gh
+      Direct commits:  no PR → stat-filtered (>10 files = skip) → diff extraction
+
+    State is stored in .memex/state.json — only new commits are ever processed.
+    Run `memex index` afterwards to embed the new records.
+
+    \b
+    Examples:
+      memex update                      # commits since last run
+      memex update --since 2024-01-01   # backfill from a date
+      memex update --limit 50           # bootstrap: scan last 50 commits
+    """
+    from .update import run_update
+
+    click.echo("Scanning git history for new decisions...\n")
+
+    result = run_update(
+        limit=limit,
+        since=since,
+        repo=repo,
+        progress_cb=click.echo,
+    )
+
+    if result.errors:
+        click.echo("")
+        for err in result.errors:
+            click.echo(f"  ⚠  {err}", err=True)
+
+    click.echo(
+        f"\n{result.processed} commits scanned — "
+        f"{result.written} written, "
+        f"{result.skipped_already_indexed} already indexed, "
+        f"{result.skipped_low_signal} low signal, "
+        f"{result.skipped_stat_filter} stat-filtered, "
+        f"{result.skipped_no_decision} no decision found."
+    )
+
+    if result.written > 0:
+        click.echo("Run `memex index` to embed and make the new records queryable.")
+
+
+@cli.command()
 def index():
     """Embed and index all knowledge records in this repo."""
     records = list(KNOWLEDGE_DIR.rglob("*.md"))

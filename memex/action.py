@@ -76,8 +76,8 @@ def main() -> None:
     # Write the knowledge record
     path = write_record(
         record=result.record,
-        pr_url=pr_url,
-        pr_author=pr_author,
+        source_url=pr_url,
+        author=pr_author,
         pr_number=int(pr_number),
         repo=repo,
     )
