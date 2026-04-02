@@ -10,7 +10,7 @@ KNOWLEDGE_DIR = Path("knowledge")
 INDEX_FILE = Path(".memex/index.json")
 
 
-def _client() -> Anthropic:
+def _anthropic_client() -> Anthropic:
     """Return an Anthropic client, with a clean error if the key is missing."""
     try:
         return Anthropic(api_key=load_api_key())
@@ -18,13 +18,20 @@ def _client() -> Anthropic:
         raise click.ClickException(str(e)) from e
 
 
+_embedder = None
+
+def _get_embedder():
+    """Return a cached fastembed TextEmbedding model (downloads once, ~130 MB)."""
+    global _embedder
+    if _embedder is None:
+        from fastembed import TextEmbedding
+        _embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    return _embedder
+
+
 def embed(texts: list[str]) -> list[list[float]]:
-    """Get embeddings from Anthropic — no extra dependency needed."""
-    response = _client().embeddings.create(
-        model="voyage-3-lite",
-        input=texts,
-    )
-    return [r.embedding for r in response.data]
+    """Embed texts locally using fastembed — no API key required."""
+    return [emb.tolist() for emb in _get_embedder().embed(texts)]
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -73,40 +80,41 @@ def configure():
     """Save your Anthropic API key for all memex commands.
 
     The key is written to ~/.config/memex/config.toml (chmod 600).
-    Setting the ANTHROPIC_API_KEY environment variable takes precedence
-    over the config file if both are present.
-    """
-    current_source = key_source()
-    if current_source != "not set":
-        click.echo(f"Current key source: {current_source}")
+    The environment variable ANTHROPIC_API_KEY takes precedence if set.
 
-    api_key = click.prompt(
+    Semantic search (memex index / memex query) runs locally via fastembed
+    — no second API key needed.
+    """
+    current = key_source()
+    if current != "not set":
+        click.echo(f"Current key source: {current}")
+
+    anthropic_key = click.prompt(
         "Anthropic API key",
         hide_input=True,
         prompt_suffix=" (sk-ant-...): ",
     ).strip()
 
-    if not api_key.startswith("sk-"):
+    if not anthropic_key.startswith("sk-"):
         raise click.ClickException(
             "That doesn't look like a valid Anthropic API key (should start with 'sk-')."
         )
 
     click.echo("Validating key...", nl=False)
     try:
-        client = Anthropic(api_key=api_key)
-        # Cheapest possible call — one token, just to confirm the key is accepted
-        client.messages.create(
+        _client = Anthropic(api_key=anthropic_key)
+        _client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=1,
             messages=[{"role": "user", "content": "hi"}],
         )
         click.echo(" ✓")
     except Exception as exc:
-        raise click.ClickException(f"Key rejected by Anthropic API: {exc}") from exc
+        raise click.ClickException(f"Key rejected: {exc}") from exc
 
-    save_api_key(api_key)
-    click.echo(f"Key saved to {CONFIG_FILE}")
-    click.echo("\nYou're all set. Try: memex init")
+    save_api_key(anthropic_key)
+    click.echo(f"\nKey saved to {CONFIG_FILE}")
+    click.echo("You're all set. Try: memex init")
 
 
 @cli.command()

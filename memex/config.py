@@ -25,7 +25,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 # ---------------------------------------------------------------------------
 
 class MissingApiKeyError(Exception):
-    """Raised when no API key can be found anywhere in the resolution chain."""
+    """Raised when no Anthropic API key can be found anywhere in the resolution chain."""
 
     def __str__(self) -> str:
         return (
@@ -58,12 +58,10 @@ def load_api_key() -> str:
     Return the Anthropic API key, checking env var then config file.
     Raises MissingApiKeyError if neither is set.
     """
-    # 1. Environment variable — highest precedence, no file I/O needed
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if key:
         return key
 
-    # 2. Config file
     key = _read_config_file().get("api_key", "").strip()
     if key:
         return key
@@ -72,10 +70,9 @@ def load_api_key() -> str:
 
 
 def save_api_key(api_key: str) -> None:
-    """Write the API key to ~/.config/memex/config.toml."""
+    """Write the Anthropic API key to ~/.config/memex/config.toml (chmod 600)."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Preserve any existing keys we don't own
     existing = _read_config_file()
     existing["api_key"] = api_key
 
@@ -88,7 +85,7 @@ def save_api_key(api_key: str) -> None:
 
 
 def key_source() -> str:
-    """Human-readable description of where the active key comes from."""
+    """Human-readable description of where the active Anthropic key comes from."""
     if os.environ.get("ANTHROPIC_API_KEY", "").strip():
         return "environment variable ANTHROPIC_API_KEY"
     if CONFIG_FILE.exists() and _read_config_file().get("api_key"):
