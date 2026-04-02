@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 from .schema import KnowledgeRecord, ConfidenceLevel
@@ -99,7 +99,8 @@ def write_record(
     slug = record.title.lower()
     slug = "".join(c if c.isalnum() or c == " " else "" for c in slug)
     slug = "-".join(slug.split()[:8])
-    filename = f"{date.today().isoformat()}-{slug}.md"
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+    filename = f"{timestamp}-{slug}.md"
 
     path = output_dir / filename
     path.write_text(render_markdown(record, source_url, author, repo, pr_number))
