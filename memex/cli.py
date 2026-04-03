@@ -249,7 +249,7 @@ def update(limit, since, repo):
 @cli.command()
 @click.option("--force", is_flag=True, help="Re-index all records, ignoring existing cache.")
 def index(force):
-    """Embed and index all knowledge records in this repo."""
+    """Make knowledge queryable."""
     records = list(KNOWLEDGE_DIR.rglob("*.md"))
     if not records:
         click.echo("No knowledge records found. Is the GitHub Action installed?")
