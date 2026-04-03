@@ -249,44 +249,6 @@ Local semantic search uses [fastembed](https://github.com/qdrant/fastembed) (`BA
 
 ---
 
-## Confidence scores
-
-The `confidence` field measures **how much decision rationale is present in the PR or the commits** — not whether the extraction is accurate. A low score means the PR described *what* changed but not *why*.
-
-| Score | Meaning | Action |
-|---|---|---|
-| `< 0.30` | Barely any rationale | Discarded silently |
-| `0.30–0.40` | Decision detected but reasoning thin | Record discarded, nudge comment posted |
-| `0.40–0.65` | Some rationale present | Record written with `⚠️ Low confidence` flag |
-| `> 0.65` | Clear reasoning captured | Record written normally |
-
-### What drives a low score
-
-- **No alternatives mentioned** — the PR doesn't say what else was considered or ruled out
-- **No constraints stated** — no mention of what shaped the decision (deadlines, existing infra, team skills)
-- **Vague context** — "we needed a better solution" without explaining what was wrong with the current one
-- **Decision-only descriptions** — the PR says what was done but not why
-
-### How to get higher confidence
-
-You don't need to write an essay. One or two sentences covering these points is enough:
-
-**State the reason for the change:**
-> "We were hitting SQS's 256KB message size limit as payloads grew."
-
-**Name what you considered and why you didn't choose it:**
-> "We looked at SNS fanout but its filtering model doesn't support per-tenant routing."
-
-**Note the key constraints:**
-> "Redis was already running for caching, so ops overhead was minimal."
-
-**Flag anything temporary:**
-> "Redis becomes a SPOF for both caching and eventing — we'll revisit this when we move to multi-region."
-
-A PR description with these four elements will consistently score above 0.75. A PR that only says "migrate X to Y" will score around 0.40.
-
----
-
 ## Requirements
 
 - Python 3.12+
