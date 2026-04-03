@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.ACCESS_TOKEN_GITHUB }}
+          token: ${{ secrets.TOKEN_GITHUB }}
 
       - uses: actions/setup-python@v5
         with:
