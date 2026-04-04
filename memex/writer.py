@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,8 @@ def render_markdown(
     author: str,
     repo: str,
     pr_number: Optional[int] = None,
+    tags: Optional[list[str]] = None,
+    related: Optional[list[str]] = None,
 ) -> str:
     """Render a KnowledgeRecord to the canonical Memex markdown format."""
     level = confidence_level(record.confidence)
@@ -40,12 +43,18 @@ def render_markdown(
     # pr: field only present for PR-sourced records
     pr_line = f"pr: {pr_number}\n" if pr_number else ""
 
+    # tags and related frontmatter lines
+    tags_line = f"tags: {json.dumps(tags or [])}\n"
+    related_line = f"related: {json.dumps(related)}\n" if related else ""
+
     # Footer label adapts to source type
     if pr_number:
         footer = f"_Extracted by Memex from [PR #{pr_number}]({source_url}) · {date.today().isoformat()}_"
-    else:
-        short_sha = source_url.split("/")[-1][:8] if "/commit/" in source_url else source_url
+    elif "/commit/" in source_url:
+        short_sha = source_url.split("/")[-1][:8]
         footer = f"_Extracted by Memex from [commit {short_sha}]({source_url}) · {date.today().isoformat()}_"
+    else:
+        footer = f"_Extracted by Memex from [{source_url}]({source_url}) · {date.today().isoformat()}_"
 
     return f"""---
 title: "{record.title}"
@@ -54,8 +63,7 @@ author: "{author}"
 source: "{source_url}"
 {pr_line}repo: "{repo}"
 confidence: {record.confidence:.2f}
-tags: []
----
+{tags_line}{related_line}---
 
 # {record.title}
 {confidence_flag}
@@ -92,6 +100,8 @@ def write_record(
     repo: str,
     pr_number: Optional[int] = None,
     output_dir: Path = Path("knowledge/decisions"),
+    tags: Optional[list[str]] = None,
+    related: Optional[list[str]] = None,
 ) -> Path:
     """Write a rendered knowledge record to disk. Returns the file path."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -103,5 +113,5 @@ def write_record(
     filename = f"{timestamp}-{slug}.md"
 
     path = output_dir / filename
-    path.write_text(render_markdown(record, source_url, author, repo, pr_number))
+    path.write_text(render_markdown(record, source_url, author, repo, pr_number, tags, related))
     return path

@@ -24,7 +24,7 @@ Results for: why did we move off MongoDB
 
 1. **GitHub Action** — triggers on every merged PR, calls Claude to extract decision context, opens a `memex/pr-{N}` branch with the structured `.md` file, and creates a PR for review
 2. **Local CLI** — `memex index` embeds your knowledge files locally; `memex query` runs semantic search over them
-3. **ADR parser** — on first run, scans your repo for existing ADR files and indexes them automatically
+3. **ADR parser** — indexes existing ADR files automatically: on `memex init`, via `memex index --include-adrs`, and whenever a merged PR touches an ADR file
 4. **Low-confidence nudge** — when a PR looks like it contains a decision but lacks rationale, Memex posts a single comment asking for one sentence of context
 
 ---
@@ -55,7 +55,7 @@ This prompts for your [Anthropic API key](https://console.anthropic.com/), valid
 memex init
 ```
 
-Scans your repo for architectural decisions already embedded in config files, package manifests, and infrastructure code. Writes initial knowledge records to `knowledge/decisions/`.
+Scans your repo for architectural decisions already embedded in config files, package manifests, and infrastructure code. Also parses any existing ADR files found in `docs/adr/`, `docs/decisions/`, `decisions/`, or `adr/`. Writes initial knowledge records to `knowledge/decisions/`.
 
 Use `--dry-run` to preview what would be extracted without writing any files.
 
@@ -202,6 +202,28 @@ _Extracted by Memex from [PR #2847](https://github.com/acme/api-core/pull/2847) 
 
 Files are human-readable, git-diffable, and owned by your repo. There is no external database.
 
+ADR-sourced records are tagged `["adr"]` in frontmatter. When a PR body or review comment
+references an ADR number (e.g. `ADR-041`), Memex automatically adds a `related:` link from the
+PR's knowledge record to the corresponding ADR record.
+
+---
+
+## ADR support
+
+Memex understands [Nygard-format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions) ADRs (`## Status`, `## Context`, `## Decision`, `## Consequences` headers).
+
+ADR files are picked up in three ways — you don't need to do anything extra:
+
+| When | How |
+|---|---|
+| `memex init` | Scanned automatically alongside repo manifests |
+| `memex index --include-adrs` | On-demand parse + embed; safe to run multiple times |
+| GitHub Action | Parsed inline when a merged PR adds or modifies an ADR file |
+
+Memex looks in: `docs/adr/`, `docs/decisions/`, `decisions/`, `adr/`.
+
+Confidence is derived from ADR status: `Accepted` → 0.85, `Proposed` → 0.70, `Deprecated`/`Superseded` → 0.60.
+
 ---
 
 ## What gets extracted (and what doesn't)
@@ -229,12 +251,14 @@ To skip a specific PR from extraction, add the `memex:skip` label before merging
 ```
 memex configure            Prompt for API key and save to ~/.config/memex/config.toml
 memex init [PATH]          Bootstrap knowledge from existing codebase (--dry-run to preview)
+                           Also parses any ADR files found in standard ADR directories
 memex update               Process merged PRs from git history not yet indexed
   --limit N                Process at most N recent PRs
   --since DATE             Only process PRs merged after DATE (YYYY-MM-DD)
   --repo OWNER/REPO        Target a specific repo (default: current repo)
 memex index                Embed knowledge files and write vectors to .memex/index.json
   --force                  Re-embed all files, ignoring the incremental cache
+  --include-adrs           Parse ADR files before embedding (safe to run repeatedly)
 memex query QUESTION       Semantic search over indexed knowledge
   --top N                  Return top N results (default: 3)
 ```

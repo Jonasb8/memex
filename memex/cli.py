@@ -189,6 +189,15 @@ def init(path, dry_run):
     if dry_run:
         click.echo("\n[dry-run] No files written.")
     else:
+        from .adr import index_adrs
+        adr_paths = index_adrs(root, output_dir=root / "knowledge" / "decisions", repo=repo_name)
+        if adr_paths:
+            click.echo(f"\nIndexed {len(adr_paths)} ADR(s):")
+            for p in adr_paths:
+                try:
+                    click.echo(f"  → {Path(p).resolve().relative_to(root.resolve())}")
+                except ValueError:
+                    click.echo(f"  → {p}")
         click.echo(f"\nDone. Run `memex index` to embed and make them queryable.")
 
 
@@ -248,8 +257,15 @@ def update(limit, since, repo):
 
 @cli.command()
 @click.option("--force", is_flag=True, help="Re-index all records, ignoring existing cache.")
-def index(force):
+@click.option("--include-adrs", is_flag=True, help="Parse ADR files before embedding.")
+def index(force, include_adrs):
     """Make knowledge queryable."""
+    if include_adrs:
+        from .adr import index_adrs
+        adr_paths = index_adrs(Path("."), KNOWLEDGE_DIR / "decisions", repo="local")
+        if adr_paths:
+            click.echo(f"Parsed {len(adr_paths)} new ADR(s).")
+
     records = list(KNOWLEDGE_DIR.rglob("*.md"))
     if not records:
         click.echo("No knowledge records found. Is the GitHub Action installed?")

@@ -48,7 +48,10 @@ memex/
 │   ├── extractor.py           # LLM extraction pipeline (LiteLLM + Instructor)
 │   ├── writer.py              # Renders KnowledgeRecord to .md and commits it
 │   ├── action.py              # GitHub Action entry point — reads env vars, orchestrates
-│   └── cli.py                 # Click CLI — `memex index` and `memex query`
+│   ├── adr.py                 # ADR parser — find_adr_files, parse_adr, index_adrs
+│   ├── cli.py                 # Click CLI — `memex index` and `memex query`
+│   ├── init.py                # `memex init` — bootstrap from repo scan
+│   └── update.py              # `memex update` — incremental extraction from git history
 ├── tests/
 │   └── ...
 ├── pyproject.toml
@@ -125,13 +128,18 @@ When a PR merges, `action.py` runs this sequence:
 
 1. Read `PR_TITLE`, `PR_BODY`, `PR_URL`, `PR_NUMBER`, `PR_AUTHOR`, `REPO` from env
 2. Fetch review comments via `gh pr view {number} --json reviews`
-3. Run `is_low_signal(title, body)` — regex check for dependency bumps, style fixes, etc.
+3. Fetch changed files via `gh pr view {number} --json files`
+4. **ADR files in this PR** — for each changed `.md` in `docs/adr/`, `docs/decisions/`,
+   `decisions/`, or `adr/`: call `parse_adr(path)` and write with `tags: ["adr"]`
+5. Run `is_low_signal(title, body)` — regex check for dependency bumps, style fixes, etc.
    If true → exit 0, log "low-signal PR skipped"
-4. Call `extract(title, body, review_comments)` — Instructor + Claude Sonnet
-5. If `contains_decision` is False → exit 0 silently
-5b. If `contains_decision` is True but `confidence < 0.65` → discard silently
-6. If `contains_decision` is True:
-   - Call `write_record(...)` → renders markdown, writes to `knowledge/decisions/`
+6. Call `extract(title, body, review_comments)` — Instructor + Claude Sonnet
+7. If `contains_decision` is False → exit 0 silently
+7b. If `contains_decision` is True but `confidence < 0.65` → discard silently
+8. If `contains_decision` is True:
+   - Scan PR body + review comments for `ADR-NNN` patterns; glob matching knowledge records
+     into a `related` list
+   - Call `write_record(...)` with `related=related` → renders markdown, writes to `knowledge/decisions/`
    - Git commit and push the new file
 
 **The nudge comment is posted at most once per PR. Never post it twice.**
@@ -152,6 +160,7 @@ pr: 2847
 repo: "acme/api-core"
 confidence: 0.87
 tags: []
+related: ["knowledge/decisions/2024-01-10-adr-041-use-postgresql.md"]
 ---
 
 # Migrate billing store to PostgreSQL
@@ -186,6 +195,9 @@ _Extracted by Memex from [PR #2847](https://github.com/acme/api-core/pull/2847) 
 The frontmatter fields are the machine-readable contract. Do not add or remove fields
 without updating the indexer and CLI accordingly.
 
+- `tags` — always present, defaults to `[]`. ADR-sourced records carry `["adr"]`; init records carry `["init"]`.
+- `related` — optional. Only written when non-empty. Contains paths to related knowledge records (e.g. when a PR cites an ADR number).
+
 ---
 
 ## CLI behaviour
@@ -214,16 +226,60 @@ Results for: why did we move off MongoDB
 
 ## ADR parser
 
-On first run (or when invoked via `memex index --include-adrs`), scan for existing ADRs:
-- Look in `docs/adr/`, `docs/decisions/`, `decisions/`, `adr/`
-- Match files named `NNNN-*.md` or `*.md` containing `## Status` and `## Decision` headers
-- Parse into `KnowledgeRecord` schema — map ADR sections to fields
-- Write to `knowledge/decisions/` with `source` pointing to the ADR file path
-- Mark these with `tags: ["adr"]` in frontmatter
+Implemented in `memex/adr.py`. Three entry points — all use the same shared logic:
 
-If an ADR number (e.g. `ADR-041`) appears in a PR description or review comment,
-cross-reference it in the knowledge record with a `related: ["knowledge/decisions/adr-041-*.md"]`
-frontmatter field.
+| Entry point | When it runs |
+|---|---|
+| `memex init` | Always — ADRs are part of the bootstrap scan |
+| `memex index --include-adrs` | On demand, safe to run repeatedly (deduped by `source:` field) |
+| GitHub Action | Automatically when a merged PR adds/modifies a file in an ADR directory |
+
+**Scanning:** `find_adr_files(root)` globs `docs/adr/`, `docs/decisions/`, `decisions/`, `adr/`.
+Accepts `.md` files matching `NNNN-*.md` OR containing both `## Status` and `## Decision` headers.
+
+**Parsing:** `parse_adr(path)` maps Nygard sections to `KnowledgeRecord`:
+
+| ADR section | Field |
+|---|---|
+| H1 title | `title` |
+| `## Context` | `context` (first 3 sentences) |
+| `## Decision` | `decision` (first sentence) |
+| `## Consequences` | `constraints` (bullet lines); lines with "revisit/until/when/temporary" → `revisit_signals` |
+| `## Status` | `confidence`: Accepted→0.85, Proposed→0.70, Deprecated/Superseded→0.60 |
+
+Returns `None` if `## Decision` is empty — never writes an empty record.
+
+**Deduplication:** `already_indexed(adr_path, output_dir)` checks if any existing record has a
+`source:` frontmatter value matching the ADR path. Re-running `index_adrs` is always safe.
+
+**Cross-referencing:** When a PR body or review comment contains `ADR-NNN`, `action.py` globs
+`knowledge/decisions/` for matching records and writes them to the `related:` frontmatter field
+of the PR's knowledge record.
+
+---
+
+## Agent rules — cross-cutting concerns
+
+Before implementing any feature that touches knowledge record creation, extraction logic,
+frontmatter fields, or file I/O, **pause and check whether the change also affects these
+three existing entry points**:
+
+| Entry point | File | Triggers |
+|---|---|---|
+| `memex init` | `memex/init.py` + `cli.py` | Manual bootstrap from repo scan |
+| `memex update` | `memex/update.py` + `cli.py` | Incremental git history extraction |
+| GitHub Action | `memex/action.py` | Every merged PR |
+
+If the change is relevant to one or more of these and the spec doesn't explicitly say to
+update them, **ask for clarification before proceeding**. Examples that require a check:
+
+- Adding a new frontmatter field → does the indexer need updating? Does `already_indexed` need updating?
+- Changing `write_record` signature → are all three entry points passing the right args?
+- Changing confidence thresholds or discard logic → should the same logic apply in `update.py`?
+- Adding a new source type (e.g. incident reports) → should it be wired into `init`, `update`, and the Action?
+
+Do not silently skip one entry point to keep the diff small. Inconsistency across entry points
+is harder to debug than a slightly larger PR.
 
 ---
 
@@ -314,7 +370,7 @@ Confidence 0.0, no record written, no comment posted.
 These were explicitly chosen and the reasoning is documented above:
 
 - Python over TypeScript — LLM ecosystem advantage
-- `voyage-3-lite` over `text-embedding-3-small` — single API key, same SDK
+- `fastembed` (`BAAI/bge-small-en-v1.5`) for local embeddings — no API key required, no data leaves the machine during queries
 - `numpy` over ChromaDB — no database needed at this scale
 - `instructor` over raw JSON parsing — reliability, not convenience
 - Markdown files over SQLite — git-native, diffable, user-owned
@@ -337,7 +393,7 @@ If you are picking up this project fresh, work in this sequence:
 5. `.github/workflows/memex.yml` — the Action definition
 6. `memex/cli.py` — `memex index` and `memex query`
 7. `tests/` — unit tests for each module with mocked LLM calls
-8. ADR parser — `memex index --include-adrs`
+8. `memex/adr.py` — ADR parser; wire into `init`, `index --include-adrs`, and `action.py` ✅
 9. `README.md` — installation instructions, one-minute quickstart
 
 Do not start step N+1 until step N has tests passing.
