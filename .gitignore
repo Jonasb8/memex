@@ -1,0 +1,4 @@
+memex/__pycache__/
+.memex/
+.env
+dist/

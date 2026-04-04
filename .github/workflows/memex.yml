@@ -1,0 +1,55 @@
+name: Memex knowledge extraction
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  extract:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Memex
+        run: pip install memex-oss
+
+      - name: Extract knowledge
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m memex.action
+
+      - name: Commit knowledge record and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "memex-bot"
+          git config user.email "memex-bot@users.noreply.github.com"
+          git add knowledge/ 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          BRANCH="memex/pr-${{ github.event.pull_request.number }}"
+          git checkout -b "$BRANCH"
+          git commit -m "memex: capture decision from PR #${{ github.event.pull_request.number }}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "memex: capture decision from PR #${{ github.event.pull_request.number }}" \
+            --body "Knowledge record extracted from [PR #${{ github.event.pull_request.number }}](${{ github.event.pull_request.html_url }}) by memex-bot." \
+            --base "${{ github.event.pull_request.base.ref }}" \
+            --head "$BRANCH"

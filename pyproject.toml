@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memex-oss"
+version = "0.1.0"
+description = "Institutional knowledge extraction for engineering teams"
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Memex Contributors" }]
+keywords = ["knowledge-management", "github-actions", "adr", "engineering"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.34.0",
+    "fastembed>=0.3.0",
+    "instructor>=1.4.0",
+    "pydantic>=2.8.0",
+    "numpy>=1.26.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
+]
+
+[project.scripts]
+memex = "memex.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["memex"]
