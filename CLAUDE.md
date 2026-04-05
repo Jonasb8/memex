@@ -331,6 +331,25 @@ pytest tests/ -v
 
 ---
 
+## Running tests — agent instructions
+
+After making any code changes, run the tests for the affected modules before
+declaring the task complete. Use `pytest` with `-v` for readable output.
+
+| Module changed | Command |
+|---|---|
+| `memex/init.py` | `pytest tests/test_init.py -v` |
+| `memex/update.py` | `pytest tests/test_update.py -v` |
+| `memex/action.py` | `pytest tests/test_action.py tests/test_nudge.py -v` |
+| `memex/nudge.py` | `pytest tests/test_nudge.py -v` |
+| `memex/extractor.py` or `memex/writer.py` | `pytest tests/ -v` |
+| Any other change | `pytest tests/ -v` |
+
+Always run at minimum the tests for the module you changed. Run `pytest tests/ -v`
+if your change touches multiple modules or has cross-cutting effects.
+
+---
+
 ## What good looks like — example high-signal PR
 
 ```
