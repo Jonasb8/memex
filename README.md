@@ -25,7 +25,7 @@ Results for: why did we move off MongoDB
 1. **GitHub Action** — triggers on every merged PR, calls Claude to extract decision context, opens a `memex/pr-{N}` branch with the structured `.md` file, and creates a PR for review
 2. **Local CLI** — `memex index` embeds your knowledge files locally; `memex query` runs semantic search over them
 3. **ADR parser** — indexes existing ADR files automatically: on `memex init`, via `memex index --include-adrs`, and whenever a merged PR touches an ADR file
-4. **Low-confidence nudge** — when a PR looks like it contains a decision but lacks rationale, Memex posts a single comment asking for one sentence of context
+4. **Low-confidence nudge** — when a PR looks like it contains a decision but lacks rationale, Memex posts a single comment asking for one sentence of context; if the author replies, Memex re-runs extraction with the reply and writes the record
 
 ---
 
@@ -96,6 +96,8 @@ name: Memex knowledge extraction
 on:
   pull_request:
     types: [closed]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -103,7 +105,9 @@ permissions:
 
 jobs:
   extract:
-    if: github.event.pull_request.merged == true
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+      github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,13 +123,16 @@ jobs:
       - name: Extract knowledge
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: python -m memex.action
 
       - name: Commit knowledge record and open PR
@@ -136,15 +143,17 @@ jobs:
           git config user.email "memex-bot@users.noreply.github.com"
           git add knowledge/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          BRANCH="memex/pr-${{ github.event.pull_request.number }}"
-          git checkout -b "$BRANCH"
-          git commit -m "memex: capture decision from PR #${{ github.event.pull_request.number }}"
+          PR_NUM="${{ github.event.pull_request.number || github.event.issue.number }}"
+          BRANCH="memex/pr-${PR_NUM}"
+          git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+          git commit -m "memex: capture decision from PR #${PR_NUM}"
           git push origin "$BRANCH"
           gh pr create \
-            --title "memex: capture decision from PR #${{ github.event.pull_request.number }}" \
-            --body "Knowledge record extracted from [PR #${{ github.event.pull_request.number }}](${{ github.event.pull_request.html_url }}) by memex-bot." \
-            --base "${{ github.event.pull_request.base.ref }}" \
-            --head "$BRANCH"
+            --title "memex: capture decision from PR #${PR_NUM}" \
+            --body "Knowledge record extracted from PR #${PR_NUM} by memex-bot." \
+            --base "${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}" \
+            --head "$BRANCH" \
+            2>/dev/null || true
 ```
 
 Add `ANTHROPIC_API_KEY` as a repository secret. That's the only secret required.
@@ -237,10 +246,10 @@ Memex is deliberately conservative. The expected discard rate is **70–80% of P
 
 **Skipped silently** — low-signal PRs caught by heuristics before any LLM call:
 - Dependency bumps (`bump axios from 1.6.0 to 1.7.2`)
-- Style/lint fixes, formatting changes
-- WIP/draft PRs, reverts, conventional `chore:` commits
+- Lockfile-only updates (`update dependencies`)
+- Conventional commits (`chore:`, `fix:`, `style:`, etc.) **with no or minimal body** — if the PR description explains the reasoning, Memex will still extract it
 
-**Nudge comment** — borderline PRs (confidence 0.30–0.40): Memex posts a single comment asking for one sentence of rationale. Posted at most once per PR.
+**Nudge comment** — borderline PRs (confidence 0.40–0.80): Memex posts a single comment asking for one sentence of rationale. If the author replies, Memex re-runs extraction with the reply appended. Posted at most once per PR.
 
 To skip a specific PR from extraction, add the `memex:skip` label before merging.
 
@@ -281,10 +290,9 @@ The `confidence` field measures **how much decision rationale is present in the 
 
 | Score | Meaning | Action |
 |---|---|---|
-| `< 0.30` | Barely any rationale | Discarded silently |
-| `0.30–0.40` | Decision detected but reasoning thin | Record discarded, nudge comment posted |
-| `0.40–0.65` | Some rationale present | Record written with `⚠️ Low confidence` flag |
-| `> 0.65` | Clear reasoning captured | Record written normally |
+| `< 0.40` | Barely any rationale | Discarded silently |
+| `0.40–0.80` | Decision found but reasoning incomplete | Record written with `⚠️ Low confidence` flag; nudge comment posted |
+| `≥ 0.80` | Clear reasoning captured | Record written normally |
 
 ### What drives a low score
 

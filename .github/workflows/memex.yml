@@ -3,10 +3,14 @@ name: Memex knowledge extraction
 on:
   pull_request:
     types: [closed]
+  issue_comment:
+    types: [created]
 
 jobs:
   extract:
-    if: github.event.pull_request.merged == true
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+      github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,13 +31,16 @@ jobs:
       - name: Extract knowledge
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: python -m memex.action
 
       - name: Commit knowledge record and open PR
@@ -44,12 +51,14 @@ jobs:
           git config user.email "memex-bot@users.noreply.github.com"
           git add knowledge/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          BRANCH="memex/pr-${{ github.event.pull_request.number }}"
-          git checkout -b "$BRANCH"
-          git commit -m "memex: capture decision from PR #${{ github.event.pull_request.number }}"
+          PR_NUM="${{ github.event.pull_request.number || github.event.issue.number }}"
+          BRANCH="memex/pr-${PR_NUM}"
+          git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+          git commit -m "memex: capture decision from PR #${PR_NUM}"
           git push origin "$BRANCH"
           gh pr create \
-            --title "memex: capture decision from PR #${{ github.event.pull_request.number }}" \
-            --body "Knowledge record extracted from [PR #${{ github.event.pull_request.number }}](${{ github.event.pull_request.html_url }}) by memex-bot." \
-            --base "${{ github.event.pull_request.base.ref }}" \
-            --head "$BRANCH"
+            --title "memex: capture decision from PR #${PR_NUM}" \
+            --body "Knowledge record extracted from PR #${PR_NUM} by memex-bot." \
+            --base "${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}" \
+            --head "$BRANCH" \
+            2>/dev/null || true

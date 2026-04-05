@@ -12,19 +12,31 @@ def _client():
 
 DISCARD_THRESHOLD = 0.40
 
-# Patterns that indicate a low-signal PR — skip LLM call entirely
-LOW_SIGNAL_PATTERNS = [
-    r"^(chore|fix|style|docs|test|ci|build)(\(.+\))?: .{1,40}$",
+# Always skip — body content never rescues these (dep bumps, lockfile noise)
+_ALWAYS_LOW_SIGNAL = [
     r"bump .+ from .+ to .+",
     r"update (dependencies|deps|packages|lockfile)",
+]
+
+# Skip only when body is absent or trivial — a substantive body may contain a real decision
+_TITLE_LOW_SIGNAL = [
+    r"^(chore|fix|style|docs|test|ci|build)(\(.+\))?: .{1,40}$",
     r"^(wip|WIP)[\s:]",
 ]
+
+_BODY_TRIVIAL_THRESHOLD = 80  # chars — below this, treat body as absent
 
 
 def is_low_signal(title: str, body: str) -> bool:
     """Quick heuristic check before spending an LLM call."""
     text = f"{title}\n{body}"
-    return any(re.search(p, text, re.IGNORECASE) for p in LOW_SIGNAL_PATTERNS)
+    if any(re.search(p, text, re.IGNORECASE) for p in _ALWAYS_LOW_SIGNAL):
+        return True
+    body_is_trivial = len((body or "").strip()) < _BODY_TRIVIAL_THRESHOLD
+    if body_is_trivial:
+        if any(re.search(p, title, re.IGNORECASE) for p in _TITLE_LOW_SIGNAL):
+            return True
+    return False
 
 
 def build_prompt(pr_title: str, pr_body: str, review_comments: list[str]) -> str:

@@ -2,3 +2,4 @@ memex/__pycache__/
 .memex/
 .env
 dist/
+tests/__pycache__/
