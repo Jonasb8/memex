@@ -332,4 +332,4 @@ A PR description with these four elements will consistently score above 0.75. A 
 
 ## License
 
-MIT
+AGPL-3.0
