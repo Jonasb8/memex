@@ -272,6 +272,14 @@ def index(force, include_adrs):
         return
 
     existing = load_index() if not force else {}
+
+    disk_paths = {str(r) for r in records}
+    stale = [k for k in existing if k not in disk_paths]
+    for k in stale:
+        del existing[k]
+    if stale:
+        click.echo(f"Removed {len(stale)} deleted record(s) from index.")
+
     new_records = [r for r in records if str(r) not in existing]
 
     if not new_records:

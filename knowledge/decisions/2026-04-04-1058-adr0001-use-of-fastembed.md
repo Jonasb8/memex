@@ -16,11 +16,12 @@ We needed to create embedings to query the knowledge
 
 ## Decision
 
-We will use fastembed.
+We will use fastembed. because of pricing and 
 
 ## Alternatives considered
 
-_None recorded_
+voyage.ai, but is from the mongoDB ecosystem, and I privilege relational databases in general
+chroma db
 
 ## Constraints
 
