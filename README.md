@@ -2,7 +2,7 @@
 
 Memex extracts and indexes the institutional knowledge buried in your GitHub pull requests, review threads, and ADRs — automatically, without changing how your team works.
 
-Engineers don't write anything new. Memex hooks into the artifacts that already exist and makes them searchable.
+No need to maintain new documentation. Memex hooks into the artifacts that already exist and makes them searchable.
 
 ```bash
 $ memex query "why did we move off MongoDB"
