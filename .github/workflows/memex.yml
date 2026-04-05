@@ -6,16 +6,16 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   extract:
     if: |
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
       github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,8 +25,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Memex
-        run: pip install memex-oss
+      - run: pip install memex-oss
 
       - name: Extract knowledge
         env:
