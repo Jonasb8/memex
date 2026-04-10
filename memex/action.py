@@ -9,6 +9,7 @@ import json
 import subprocess
 from pathlib import Path
 from .extractor import extract, confidence_level
+from .structural import categorize_file
 from .writer import write_record
 from .schema import ConfidenceLevel
 from .nudge import should_nudge, has_nudge_comment, post_nudge_comment, is_bot_comment
@@ -18,7 +19,10 @@ _ADR_DIRS = {"docs/adr", "docs/decisions", "decisions", "adr"}
 
 
 def get_review_comments(pr_number: str, repo: str) -> list[str]:
-    """Fetch review comments via GitHub CLI."""
+    """Fetch review top-level bodies and inline review comments via GitHub CLI."""
+    comments: list[str] = []
+
+    # Top-level review bodies (submitted via "Review changes")
     try:
         result = subprocess.run(
             ["gh", "pr", "view", pr_number, "--repo", repo,
@@ -26,10 +30,35 @@ def get_review_comments(pr_number: str, repo: str) -> list[str]:
             capture_output=True, text=True, timeout=15
         )
         if result.returncode == 0:
-            return json.loads(result.stdout or "[]")
+            comments += json.loads(result.stdout or "[]")
     except Exception:
         pass
-    return []
+
+    # Inline review comments (line-level comments on code)
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/pulls/{pr_number}/comments",
+             "--jq", "[.[].body]"],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            comments += json.loads(result.stdout or "[]")
+    except Exception:
+        pass
+
+    # General PR comments (issue-level comments on the PR thread)
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{pr_number}/comments",
+             "--jq", "[.[].body]"],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            comments += json.loads(result.stdout or "[]")
+    except Exception:
+        pass
+
+    return [c for c in comments if c]
 
 
 def get_changed_files(pr_number: str, repo: str) -> list[str]:
@@ -115,7 +144,7 @@ def handle_pr_merge() -> None:
                 print(f"ADR record written: {adr_path}")
 
     # Run extraction on the PR itself
-    result = extract(pr_title, pr_body, review_comments)
+    result = extract(pr_title, pr_body, review_comments, changed_files=changed_files)
 
     if result is None:
         print("Low-signal PR — skipped.")
@@ -140,6 +169,9 @@ def handle_pr_merge() -> None:
     all_text = pr_body + " " + " ".join(review_comments)
     related = find_related_adrs(all_text) or None
 
+    # Derive structural tags from changed files (e.g. ["migration", "schema"])
+    structural_tags = sorted({categorize_file(f) for f in changed_files if categorize_file(f)}) or None
+
     # Write the knowledge record
     path = write_record(
         record=result.record,
@@ -148,6 +180,7 @@ def handle_pr_merge() -> None:
         pr_number=int(pr_number),
         repo=repo,
         related=related,
+        tags=structural_tags,
     )
 
     print(f"Knowledge record written: {path} (confidence {result.record.confidence:.2f} — {level.value})")

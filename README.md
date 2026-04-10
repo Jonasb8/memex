@@ -10,12 +10,13 @@ $ memex query "why did we move off MongoDB"
 Results for: why did we move off MongoDB
 ──────────────────────────────────────────────────────────────────────
 
-  1. Migrate billing store to PostgreSQL                     [0.91] ●
-     Unbounded schema flexibility was causing silent data corruption
-     in the billing pipeline. MongoDB's lack of enforced schema...
-     knowledge/decisions/2024-11-14-migrate-billing-store-to-postgresql.md
+  #1  Migrate billing store to PostgreSQL  [0.91]
+      ✅ High confidence
+      Unbounded schema flexibility was causing silent data corruption
+      in the billing pipeline. — Migrated billing store to PostgreSQL.
+      knowledge/decisions/2024-11-14-migrate-billing-store-to-postgresql.md
 
-  2. ...
+  #2  ...
 ```
 
 ---
@@ -80,8 +81,10 @@ git push
 ### 5. Index and query
 
 ```bash
-memex index          # embed all knowledge files (incremental — skips unchanged files)
+memex index          # embed all knowledge files (incremental — only re-embeds changed files)
 memex query "why did we switch from SQS to Redis"
+memex query --min-score 0.5 "why did we switch from SQS to Redis"   # broaden results
+memex query --expand "why did we switch from SQS to Redis"          # AI-expanded search
 ```
 
 ---
@@ -270,7 +273,61 @@ memex index                Embed knowledge files and write vectors to .memex/ind
   --include-adrs           Parse ADR files before embedding (safe to run repeatedly)
 memex query QUESTION       Semantic search over indexed knowledge
   --top N                  Return top N results (default: 3)
+  --min-score F            Hide results below this similarity score (default: 0.70)
+  --expand                 Rewrite query via Claude Haiku before searching
 ```
+
+---
+
+## Querying your knowledge
+
+`memex query` runs a local semantic search — no data leaves your machine.
+
+```bash
+memex query "why did we move off MongoDB"
+```
+
+Each result shows a similarity score `[0.00–1.00]`, a confidence badge, the decision excerpt, and the file path.
+
+### Result relevance
+
+By default, results below a **0.70 similarity score** are hidden. This threshold exists to avoid surfacing clearly unrelated records. If you get "no relevant results found", you have two options:
+
+**Lower the threshold** — cast a wider net:
+```bash
+memex query --min-score 0.5 "why did we move off MongoDB"
+```
+
+**Expand the query** — let Claude Haiku rephrase your question into richer search terms before embedding:
+```bash
+memex query --expand "how did we store v1 projects"
+```
+
+`--expand` is useful when your query is short or vague and you're not getting results you expect. It adds ~1 second of latency (one Haiku API call) and requires your `ANTHROPIC_API_KEY` to be set.
+
+Example of what expansion does:
+```
+Input:  "how did we store v1 projects"
+
+Expanded: how did we store v1 projects, v1 project storage architecture,
+          legacy v1 project storage system, v1 project data persistence
+          implementation, historical v1 project storage format,
+          v1 project repository structure
+```
+
+The expanded string is embedded as a single query — the broader vocabulary increases the chance of matching records that describe the same concept using different words.
+
+### Rationale badges in results
+
+Each result shows a **rationale badge** — a measure of how well-documented the original decision was in its source PR or ADR. This is independent of the similarity score (how well it matched your query).
+
+| Badge | Meaning |
+|---|---|
+| `✅ Rationale: well-documented` | Clear reasoning captured — safe to rely on |
+| `💡 Rationale: partial` | Some reasoning present — verify if critical |
+| `⚠️  Rationale: limited` | Little reasoning in source — treat as a hint, not a fact |
+
+A record can have a high similarity score (very relevant to your query) but limited rationale (the original PR didn't explain why). These two dimensions are independent.
 
 ---
 

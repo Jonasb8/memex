@@ -45,11 +45,14 @@ memex/
 ├── memex/
 │   ├── __init__.py
 │   ├── schema.py              # Pydantic models — KnowledgeRecord, ExtractionResult
-│   ├── extractor.py           # LLM extraction pipeline (LiteLLM + Instructor)
+│   ├── extractor.py           # LLM extraction pipeline (anthropic + Instructor)
+│   ├── structural.py          # Structural file detection — categorize_file, is_structural_change (no LLM deps)
 │   ├── writer.py              # Renders KnowledgeRecord to .md and commits it
 │   ├── action.py              # GitHub Action entry point — reads env vars, orchestrates
 │   ├── adr.py                 # ADR parser — find_adr_files, parse_adr, index_adrs
-│   ├── cli.py                 # Click CLI — `memex index` and `memex query`
+│   ├── cli.py                 # Click CLI — `memex configure/init/update/index/query`
+│   ├── config.py              # API key resolution — load_api_key, save_api_key, CONFIG_FILE
+│   ├── nudge.py               # Low-confidence nudge comment — should_nudge, post_nudge_comment
 │   ├── init.py                # `memex init` — bootstrap from repo scan
 │   └── update.py              # `memex update` — incremental extraction from git history
 ├── tests/
@@ -79,7 +82,7 @@ The index cache lives at:
 |---|---|---|
 | Language | Python 3.12+ | Best LLM ecosystem |
 | LLM — extraction | `claude-sonnet-4-6` via `anthropic` SDK | Best structured output quality |
-| LLM — embeddings | `voyage-3-lite` via `anthropic` SDK | Same SDK, same API key, no OpenAI account |
+| LLM — embeddings | `fastembed` (`BAAI/bge-small-en-v1.5`) | Local, no API key required, no data leaves machine during queries |
 | Structured output | `instructor` + `pydantic` | Guaranteed schema compliance, auto-retry |
 | Vector search | `numpy` cosine similarity over `index.json` | No database needed at MVP scale (<5k records) |
 | CLI | `click` | Standard, simple |
@@ -203,12 +206,27 @@ without updating the indexer and CLI accordingly.
 ## CLI behaviour
 
 ```bash
-memex index      # embed all .md files in knowledge/, write to .memex/index.json
+memex configure                             # store ANTHROPIC_API_KEY to ~/.memex/config.json (prompts interactively)
+memex init                                  # bootstrap: scan repo for ADRs + extract from recent git history
+memex update                                # incremental: extract from git history since last run
+memex index                                 # embed all .md files in knowledge/, write to .memex/index.json
 memex query "why did we move off MongoDB"   # cosine similarity search, top 3 results
+memex query --min-score 0.5 "..."           # broaden search by lowering the relevance threshold
+memex query --expand "vague question"       # rewrite query via Claude Haiku before embedding
 ```
 
-`memex index` should be incremental — only embed files not already in `index.json`.
-Do not re-embed records that haven't changed.
+`memex index` should be incremental — only embed files whose content has changed since
+the last run. Change detection uses a SHA256 hash of the cleaned embed text (title +
+context + decision + alternatives + constraints, with YAML frontmatter and markdown
+noise stripped). The hash is stored as `content_hash` in each index entry. Entries
+without a `content_hash` (legacy entries) are always re-embedded.
+
+`memex query` options:
+- `--top N` — show top N results (default 3)
+- `--min-score F` — hide results below this similarity threshold (default 0.70); shows
+  a "no relevant results" message with a suggested lower threshold when nothing passes
+- `--expand` — opt-in: calls Claude Haiku to rewrite the query into richer search
+  phrases before embedding; useful for short or vague queries
 
 `memex query` output format:
 ```
@@ -258,6 +276,25 @@ of the PR's knowledge record.
 
 ---
 
+## Doc sync rules
+
+`scripts/check_docs.py` runs automatically after every file edit (via `.claude/settings.json`
+hook) and on every PR (via `.github/workflows/lint.yml`). It will fail loudly if CLAUDE.md
+drifts from the code.
+
+When you make any of the changes below, update CLAUDE.md **in the same commit**:
+
+| What changed | What to update in CLAUDE.md |
+|---|---|
+| New/removed/renamed `.py` in `memex/` | File structure section |
+| New/removed `@cli.command()` in `cli.py` | CLI behaviour section |
+| `model=` string in `extractor.py` or `init.py` | Tech stack table + decisions section |
+| New dependency in `pyproject.toml` | Tech stack table |
+| New `os.environ["VAR"]` in `action.py` | Environment variables table |
+| New frontmatter field in `writer.py` | Markdown output format section |
+
+---
+
 ## Agent rules — cross-cutting concerns
 
 Before implementing any feature that touches knowledge record creation, extraction logic,
@@ -303,7 +340,7 @@ is harder to debug than a slightly larger PR.
 
 | Variable | Source | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | GitHub Secret | Required. Anthropic API key for Claude + Voyage |
+| `ANTHROPIC_API_KEY` | GitHub Secret | Required. Anthropic API key for Claude extraction |
 | `PR_TITLE` | `github.event.pull_request.title` | PR title |
 | `PR_BODY` | `github.event.pull_request.body` | PR description |
 | `PR_URL` | `github.event.pull_request.html_url` | Full URL to PR |
@@ -324,10 +361,14 @@ is harder to debug than a slightly larger PR.
 - Do not make real LLM calls in tests — mock the `instructor` client
 - Use `pytest` and `pytest-mock`
 
+**Running tests — requires Python 3.12+** (the codebase uses `|` union syntax and other 3.10+ features):
+
 ```bash
-pip install -e ".[dev]"
-pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
+
+No virtualenv or `pip install` needed — dependencies are already installed globally on this machine.
+To run a single file: `python3 -m pytest tests/test_action.py -v`
 
 ---
 
@@ -338,12 +379,12 @@ declaring the task complete. Use `pytest` with `-v` for readable output.
 
 | Module changed | Command |
 |---|---|
-| `memex/init.py` | `pytest tests/test_init.py -v` |
-| `memex/update.py` | `pytest tests/test_update.py -v` |
-| `memex/action.py` | `pytest tests/test_action.py tests/test_nudge.py -v` |
-| `memex/nudge.py` | `pytest tests/test_nudge.py -v` |
-| `memex/extractor.py` or `memex/writer.py` | `pytest tests/ -v` |
-| Any other change | `pytest tests/ -v` |
+| `memex/init.py` | `python3 -m pytest tests/test_init.py -v` |
+| `memex/update.py` | `python3 -m pytest tests/test_update.py -v` |
+| `memex/action.py` | `python3 -m pytest tests/test_action.py tests/test_nudge.py -v` |
+| `memex/nudge.py` | `python3 -m pytest tests/test_nudge.py -v` |
+| `memex/extractor.py` or `memex/writer.py` | `python3 -m pytest tests/ -v` |
+| Any other change | `python3 -m pytest tests/ -v` |
 
 Always run at minimum the tests for the module you changed. Run `pytest tests/ -v`
 if your change touches multiple modules or has cross-cutting effects.
@@ -401,18 +442,14 @@ explain why. Do not silently make a different choice.
 
 ---
 
-## What to build next (in order)
+## Current state
 
-If you are picking up this project fresh, work in this sequence:
+The MVP (Phase 1) is fully implemented and tested. All modules exist and all four core
+features are working: GitHub Action, CLI, ADR parser, and low-confidence nudge.
 
-1. `memex/schema.py` — define `KnowledgeRecord` and `ExtractionResult`
-2. `memex/extractor.py` — `is_low_signal()` + `extract()` with Instructor
-3. `memex/writer.py` — `render_markdown()` + `write_record()`
-4. `memex/action.py` — wire everything together, handle env vars and nudge comment
-5. `.github/workflows/memex.yml` — the Action definition
-6. `memex/cli.py` — `memex index` and `memex query`
-7. `tests/` — unit tests for each module with mocked LLM calls
-8. `memex/adr.py` — ADR parser; wire into `init`, `index --include-adrs`, and `action.py` ✅
-9. `README.md` — installation instructions, one-minute quickstart
-
-Do not start step N+1 until step N has tests passing.
+**Phase 2 work** (not yet started — requires explicit instruction before any of this is built):
+- Web UI / dashboard
+- Cross-repo search
+- Slack integration
+- Cloud backend / hosted service
+- Enterprise features (SSO, audit log, etc.)

@@ -1,0 +1,17 @@
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check CLAUDE.md is in sync
+        run: python3 scripts/check_docs.py

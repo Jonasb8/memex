@@ -16,6 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+# Pure helpers — safe to import at module level (no LLM dependency)
+from .structural import categorize_file, is_structural_change
+
 STATE_FILE = Path(".memex/state.json")
 KNOWLEDGE_DIR = Path("knowledge/decisions")
 
@@ -119,6 +122,17 @@ def _extract_pr_number(message: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def git_changed_file_paths(sha: str) -> list[str]:
+    """Return list of file paths changed in a commit via git diff-tree."""
+    r = subprocess.run(
+        ["git", "diff-tree", "--no-commit-id", "-r", "--name-only", sha],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return []
+    return [line.strip() for line in r.stdout.strip().splitlines() if line.strip()]
+
+
 def git_files_changed(sha: str) -> int:
     """Return number of files changed in a commit — used by the stat-first filter."""
     r = subprocess.run(
@@ -168,16 +182,19 @@ def detect_repo() -> Optional[str]:
 
 
 def fetch_pr_data(pr_number: int, repo: str) -> Optional[dict]:
-    """Fetch PR title, body, author, url, and reviews via gh CLI."""
+    """Fetch PR title, body, author, url, reviews, and changed files via gh CLI."""
     r = subprocess.run(
         ["gh", "pr", "view", str(pr_number), "--repo", repo,
-         "--json", "title,body,author,url,reviews"],
+         "--json", "title,body,author,url,reviews,files"],
         capture_output=True, text=True, timeout=15,
     )
     if r.returncode != 0:
         return None
     try:
-        return json.loads(r.stdout)
+        data = json.loads(r.stdout)
+        # Normalise changed_files into a flat list of paths
+        data["changed_files"] = [f.get("path", "") for f in data.get("files", []) if f.get("path")]
+        return data
     except json.JSONDecodeError:
         return None
 
@@ -360,26 +377,29 @@ def _process_pr_commit(
     author = (pr.get("author") or {}).get("login", commit.author)
     pr_url = pr.get("url", f"https://github.com/{repo}/pull/{pr_num}")
     reviews = [r.get("body", "") for r in pr.get("reviews", []) if r.get("body")]
+    changed_files = pr.get("changed_files", [])
 
-    if is_low_signal(title, body):
+    if is_low_signal(title, body, changed_files):
         result.skipped_low_signal += 1
         if progress_cb:
             progress_cb(f"  ✗ #{pr_num} low signal — skip")
         return
 
-    extraction = extract(title, body, reviews)
+    extraction = extract(title, body, reviews, changed_files=changed_files)
     if extraction is None or not extraction.contains_decision or extraction.record is None:
         result.skipped_no_decision += 1
         if progress_cb:
             progress_cb(f"  ✗ #{pr_num} no decision found — skip")
         return
 
+    structural_tags = sorted({categorize_file(f) for f in changed_files if categorize_file(f)}) or None
     path = write_record(
         record=extraction.record,
         source_url=pr_url,
         author=author,
         pr_number=pr_num,
         repo=repo,
+        tags=structural_tags,
     )
     indexed_prs.add(pr_num)
     result.written += 1
@@ -406,13 +426,18 @@ def _process_direct_commit(
             progress_cb(f"  ~ {sha_short} already indexed — skip")
         return
 
-    # Stat-first filter — skip large commits before any LLM call
+    # Fetch changed file paths once — reused for stat bypass, low-signal check, and tags
+    diff_files = git_changed_file_paths(commit.sha)
+
+    # Stat-first filter — skip large commits before any LLM call,
+    # unless the commit touches structural files (migrations, IaC, schema, etc.)
     n_files = git_files_changed(commit.sha)
     if n_files > MAX_FILES_CHANGED:
-        result.skipped_stat_filter += 1
-        if progress_cb:
-            progress_cb(f"  ✗ {sha_short} {n_files} files changed — stat filter")
-        return
+        if not is_structural_change(diff_files):
+            result.skipped_stat_filter += 1
+            if progress_cb:
+                progress_cb(f"  ✗ {sha_short} {n_files} files changed — stat filter")
+            return
 
     diff = git_diff(commit.sha)
     if not diff:
@@ -421,25 +446,27 @@ def _process_direct_commit(
             progress_cb(f"  ✗ {sha_short} empty diff — skip")
         return
 
-    if is_low_signal(commit.subject, diff):
+    if is_low_signal(commit.subject, diff, diff_files):
         result.skipped_low_signal += 1
         if progress_cb:
             progress_cb(f"  ✗ {sha_short} low signal — skip")
         return
 
-    extraction = extract(commit.subject, diff, [])
+    extraction = extract(commit.subject, diff, [], changed_files=diff_files)
     if extraction is None or not extraction.contains_decision or extraction.record is None:
         result.skipped_no_decision += 1
         if progress_cb:
             progress_cb(f"  ✗ {sha_short} no decision found — skip")
         return
 
+    structural_tags = sorted({categorize_file(f) for f in diff_files if categorize_file(f)}) or None
     path = write_record(
         record=extraction.record,
         source_url=c_url,
         author=commit.author,
         pr_number=None,  # direct commit — no PR number
         repo=repo,
+        tags=structural_tags,
     )
     indexed_sources.add(c_url)
     result.written += 1

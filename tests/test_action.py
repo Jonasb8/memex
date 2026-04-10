@@ -1,7 +1,9 @@
 """Unit tests for memex/action.py nudge integration and issue_comment handling."""
+import json
 import os
+import subprocess
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from pathlib import Path
 
 from memex.schema import KnowledgeRecord, ExtractionResult
@@ -34,6 +36,87 @@ BASE_ENV = {
     "GH_TOKEN": "token",
     "ANTHROPIC_API_KEY": "key",
 }
+
+
+# --- get_review_comments ---
+
+def _mock_run(stdout: str, returncode: int = 0) -> MagicMock:
+    m = MagicMock()
+    m.returncode = returncode
+    m.stdout = stdout
+    return m
+
+
+def _is_reviews_call(cmd):
+    return "--json" in cmd and "reviews" in cmd
+
+def _is_inline_comments_call(cmd):
+    return any("pulls" in arg for arg in cmd)
+
+def _is_general_comments_call(cmd):
+    return any("issues" in arg for arg in cmd)
+
+
+class TestGetReviewComments:
+    def test_combines_review_bodies_inline_and_general_comments(self):
+        from memex.action import get_review_comments
+
+        def fake_run(cmd, **kwargs):
+            if _is_reviews_call(cmd):
+                return _mock_run(json.dumps(["Top-level review body"]))
+            if _is_inline_comments_call(cmd):
+                return _mock_run(json.dumps(["Inline line comment"]))
+            if _is_general_comments_call(cmd):
+                return _mock_run(json.dumps(["General PR comment"]))
+            return _mock_run("[]")
+
+        with patch("memex.action.subprocess.run", side_effect=fake_run):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == ["Top-level review body", "Inline line comment", "General PR comment"]
+
+    def test_filters_empty_strings(self):
+        from memex.action import get_review_comments
+
+        def fake_run(cmd, **kwargs):
+            if _is_reviews_call(cmd):
+                return _mock_run(json.dumps([""]))        # empty review body
+            if _is_inline_comments_call(cmd):
+                return _mock_run(json.dumps(["Inline comment"]))
+            if _is_general_comments_call(cmd):
+                return _mock_run(json.dumps([""]))        # empty general comment
+            return _mock_run("[]")
+
+        with patch("memex.action.subprocess.run", side_effect=fake_run):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == ["Inline comment"]
+
+    def test_returns_empty_list_when_all_calls_fail(self):
+        from memex.action import get_review_comments
+
+        failing = _mock_run("", returncode=1)
+        with patch("memex.action.subprocess.run", return_value=failing):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == []
+
+    def test_partial_failure_returns_successful_sources(self):
+        from memex.action import get_review_comments
+
+        def fake_run(cmd, **kwargs):
+            if _is_reviews_call(cmd):
+                return _mock_run("", returncode=1)        # reviews call fails
+            if _is_inline_comments_call(cmd):
+                return _mock_run(json.dumps(["Inline comment"]))
+            if _is_general_comments_call(cmd):
+                return _mock_run(json.dumps(["General comment"]))
+            return _mock_run("[]")
+
+        with patch("memex.action.subprocess.run", side_effect=fake_run):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == ["Inline comment", "General comment"]
 
 
 # --- handle_pr_merge: nudge logic ---
@@ -254,3 +337,60 @@ class TestMainDispatch:
             from memex.action import main
             main()
         mock_merge.assert_called_once()
+
+
+# --- changed_files wiring ---
+
+class TestChangedFilesWiring:
+    def test_changed_files_passed_to_extract(self, tmp_path, monkeypatch):
+        """changed_files from get_changed_files() should be forwarded to extract()."""
+        monkeypatch.chdir(tmp_path)
+        for k, v in BASE_ENV.items():
+            monkeypatch.setenv(k, v)
+
+        structural_files = ["migrations/001_add_sessions.py"]
+
+        with patch("memex.action.get_review_comments", return_value=[]), \
+             patch("memex.action.get_changed_files", return_value=structural_files), \
+             patch("memex.action.extract", return_value=_make_result(0.85)) as mock_extract, \
+             patch("memex.action.write_record", return_value=Path("knowledge/decisions/foo.md")):
+
+            from memex.action import handle_pr_merge
+            handle_pr_merge()
+
+        mock_extract.assert_called_once()
+        assert mock_extract.call_args.kwargs.get("changed_files") == structural_files
+
+    def test_structural_tags_written_for_migration_pr(self, tmp_path, monkeypatch):
+        """Structural tags derived from changed_files should reach write_record."""
+        monkeypatch.chdir(tmp_path)
+        for k, v in BASE_ENV.items():
+            monkeypatch.setenv(k, v)
+
+        with patch("memex.action.get_review_comments", return_value=[]), \
+             patch("memex.action.get_changed_files", return_value=["migrations/001_add_sessions.py"]), \
+             patch("memex.action.extract", return_value=_make_result(0.85)), \
+             patch("memex.action.write_record", return_value=Path("knowledge/decisions/foo.md")) as mock_write:
+
+            from memex.action import handle_pr_merge
+            handle_pr_merge()
+
+        _, kwargs = mock_write.call_args
+        assert "migration" in (kwargs.get("tags") or [])
+
+    def test_no_structural_tags_for_plain_pr(self, tmp_path, monkeypatch):
+        """Non-structural files should produce no structural tags."""
+        monkeypatch.chdir(tmp_path)
+        for k, v in BASE_ENV.items():
+            monkeypatch.setenv(k, v)
+
+        with patch("memex.action.get_review_comments", return_value=[]), \
+             patch("memex.action.get_changed_files", return_value=["src/auth.py", "tests/test_auth.py"]), \
+             patch("memex.action.extract", return_value=_make_result(0.85)), \
+             patch("memex.action.write_record", return_value=Path("knowledge/decisions/foo.md")) as mock_write:
+
+            from memex.action import handle_pr_merge
+            handle_pr_merge()
+
+        _, kwargs = mock_write.call_args
+        assert kwargs.get("tags") is None
