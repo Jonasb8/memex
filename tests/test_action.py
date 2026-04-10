@@ -1,7 +1,9 @@
 """Unit tests for memex/action.py nudge integration and issue_comment handling."""
+import json
 import os
+import subprocess
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from pathlib import Path
 
 from memex.schema import KnowledgeRecord, ExtractionResult
@@ -34,6 +36,87 @@ BASE_ENV = {
     "GH_TOKEN": "token",
     "ANTHROPIC_API_KEY": "key",
 }
+
+
+# --- get_review_comments ---
+
+def _mock_run(stdout: str, returncode: int = 0) -> MagicMock:
+    m = MagicMock()
+    m.returncode = returncode
+    m.stdout = stdout
+    return m
+
+
+def _is_reviews_call(cmd):
+    return "--json" in cmd and "reviews" in cmd
+
+def _is_inline_comments_call(cmd):
+    return any("pulls" in arg for arg in cmd)
+
+def _is_general_comments_call(cmd):
+    return any("issues" in arg for arg in cmd)
+
+
+class TestGetReviewComments:
+    def test_combines_review_bodies_inline_and_general_comments(self):
+        from memex.action import get_review_comments
+
+        def fake_run(cmd, **kwargs):
+            if _is_reviews_call(cmd):
+                return _mock_run(json.dumps(["Top-level review body"]))
+            if _is_inline_comments_call(cmd):
+                return _mock_run(json.dumps(["Inline line comment"]))
+            if _is_general_comments_call(cmd):
+                return _mock_run(json.dumps(["General PR comment"]))
+            return _mock_run("[]")
+
+        with patch("memex.action.subprocess.run", side_effect=fake_run):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == ["Top-level review body", "Inline line comment", "General PR comment"]
+
+    def test_filters_empty_strings(self):
+        from memex.action import get_review_comments
+
+        def fake_run(cmd, **kwargs):
+            if _is_reviews_call(cmd):
+                return _mock_run(json.dumps([""]))        # empty review body
+            if _is_inline_comments_call(cmd):
+                return _mock_run(json.dumps(["Inline comment"]))
+            if _is_general_comments_call(cmd):
+                return _mock_run(json.dumps([""]))        # empty general comment
+            return _mock_run("[]")
+
+        with patch("memex.action.subprocess.run", side_effect=fake_run):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == ["Inline comment"]
+
+    def test_returns_empty_list_when_all_calls_fail(self):
+        from memex.action import get_review_comments
+
+        failing = _mock_run("", returncode=1)
+        with patch("memex.action.subprocess.run", return_value=failing):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == []
+
+    def test_partial_failure_returns_successful_sources(self):
+        from memex.action import get_review_comments
+
+        def fake_run(cmd, **kwargs):
+            if _is_reviews_call(cmd):
+                return _mock_run("", returncode=1)        # reviews call fails
+            if _is_inline_comments_call(cmd):
+                return _mock_run(json.dumps(["Inline comment"]))
+            if _is_general_comments_call(cmd):
+                return _mock_run(json.dumps(["General comment"]))
+            return _mock_run("[]")
+
+        with patch("memex.action.subprocess.run", side_effect=fake_run):
+            result = get_review_comments("42", "acme/repo")
+
+        assert result == ["Inline comment", "General comment"]
 
 
 # --- handle_pr_merge: nudge logic ---

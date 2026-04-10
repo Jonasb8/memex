@@ -361,10 +361,14 @@ is harder to debug than a slightly larger PR.
 - Do not make real LLM calls in tests — mock the `instructor` client
 - Use `pytest` and `pytest-mock`
 
+**Running tests — requires Python 3.12+** (the codebase uses `|` union syntax and other 3.10+ features):
+
 ```bash
-pip install -e ".[dev]"
-pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
+
+No virtualenv or `pip install` needed — dependencies are already installed globally on this machine.
+To run a single file: `python3 -m pytest tests/test_action.py -v`
 
 ---
 
@@ -375,12 +379,12 @@ declaring the task complete. Use `pytest` with `-v` for readable output.
 
 | Module changed | Command |
 |---|---|
-| `memex/init.py` | `pytest tests/test_init.py -v` |
-| `memex/update.py` | `pytest tests/test_update.py -v` |
-| `memex/action.py` | `pytest tests/test_action.py tests/test_nudge.py -v` |
-| `memex/nudge.py` | `pytest tests/test_nudge.py -v` |
-| `memex/extractor.py` or `memex/writer.py` | `pytest tests/ -v` |
-| Any other change | `pytest tests/ -v` |
+| `memex/init.py` | `python3 -m pytest tests/test_init.py -v` |
+| `memex/update.py` | `python3 -m pytest tests/test_update.py -v` |
+| `memex/action.py` | `python3 -m pytest tests/test_action.py tests/test_nudge.py -v` |
+| `memex/nudge.py` | `python3 -m pytest tests/test_nudge.py -v` |
+| `memex/extractor.py` or `memex/writer.py` | `python3 -m pytest tests/ -v` |
+| Any other change | `python3 -m pytest tests/ -v` |
 
 Always run at minimum the tests for the module you changed. Run `pytest tests/ -v`
 if your change touches multiple modules or has cross-cutting effects.
