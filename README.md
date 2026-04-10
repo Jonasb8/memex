@@ -275,7 +275,44 @@ memex query QUESTION       Semantic search over indexed knowledge
   --top N                  Return top N results (default: 3)
   --min-score F            Hide results below this similarity score (default: 0.70)
   --expand                 Rewrite query via Claude Haiku before searching
+memex serve                Start the MCP server (stdio) for AI coding agents
 ```
+
+---
+
+## MCP server (AI agent integration)
+
+`memex serve` exposes your knowledge index as an [MCP](https://modelcontextprotocol.io) server, making it available to AI coding agents (Claude Code, Cursor, Copilot, Windsurf) as a set of callable tools. The agent can query your team's decisions automatically before suggesting architectural changes — without you having to prompt it.
+
+Three tools are exposed:
+
+| Tool | Description |
+|---|---|
+| `memex_query(question, top, min_score)` | Semantic search — same as `memex query` but callable by the agent; default `min_score` is 0.5 so borderline matches are surfaced with their score |
+| `memex_get_decision(id)` | Fetch the full text of a specific record by file path or title slug |
+| `memex_list_recent(domain, limit)` | List recent decisions, optionally filtered by a domain keyword (e.g. `"auth"`, `"database"`) |
+
+### Setup
+
+Run `memex index` first so the server has an index to query.
+
+Create `.mcp.json` in your repo root (this file is git-ignored — paths are machine-specific):
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "/path/to/python3.12",
+      "args": ["-m", "memex.mcp_server"],
+      "cwd": "/path/to/your/repo"
+    }
+  }
+}
+```
+
+Replace `/path/to/python3.12` with the Python 3.12+ interpreter that has `memex-oss` installed (`which python3.12` or `which python3`), and `/path/to/your/repo` with the absolute path to your repo.
+
+Reload your editor and the three tools will appear in the agent's tool list automatically.
 
 ---
 
