@@ -50,11 +50,12 @@ memex/
 │   ├── writer.py              # Renders KnowledgeRecord to .md and commits it
 │   ├── action.py              # GitHub Action entry point — reads env vars, orchestrates
 │   ├── adr.py                 # ADR parser — find_adr_files, parse_adr, index_adrs
-│   ├── cli.py                 # Click CLI — `memex configure/init/update/index/query`
+│   ├── cli.py                 # Click CLI — `memex configure/init/update/index/query/serve`
 │   ├── config.py              # API key resolution — load_api_key, save_api_key, CONFIG_FILE
 │   ├── nudge.py               # Low-confidence nudge comment — should_nudge, post_nudge_comment
 │   ├── init.py                # `memex init` — bootstrap from repo scan
-│   └── update.py              # `memex update` — incremental extraction from git history
+│   ├── update.py              # `memex update` — incremental extraction from git history
+│   └── mcp_server.py          # MCP server — memex_query, memex_get_decision, memex_list_recent
 ├── tests/
 │   └── ...
 ├── pyproject.toml
@@ -86,14 +87,16 @@ The index cache lives at:
 | Structured output | `instructor` + `pydantic` | Guaranteed schema compliance, auto-retry |
 | Vector search | `numpy` cosine similarity over `index.json` | No database needed at MVP scale (<5k records) |
 | CLI | `click` | Standard, simple |
+| MCP server | `mcp` (official SDK, `mcp.server.fastmcp`) | Exposes knowledge tools to AI coding agents via stdio |
 | GitHub API | `gh` CLI in Actions, `PyGithub` if needed in Python | Already available in Actions runner |
 
 **There is no database.** Knowledge records are markdown files in the repo.
 The index is a JSON file. Do not introduce SQLite, PostgreSQL, Redis, or any other
 persistence layer in Phase 1.
 
-**There is no server.** The Action runs in GitHub's infrastructure. The CLI runs
-locally. Do not introduce FastAPI, Flask, or any web framework in Phase 1.
+**There is no HTTP server.** The Action runs in GitHub's infrastructure. The CLI runs
+locally. The MCP server uses stdio transport (subprocess-based, no network port).
+Do not introduce FastAPI, Flask, or any web framework in Phase 1.
 
 **One API key.** Everything goes through `ANTHROPIC_API_KEY`. Do not introduce
 OpenAI, Cohere, or any other LLM provider dependency.
@@ -213,6 +216,7 @@ memex index                                 # embed all .md files in knowledge/,
 memex query "why did we move off MongoDB"   # cosine similarity search, top 3 results
 memex query --min-score 0.5 "..."           # broaden search by lowering the relevance threshold
 memex query --expand "vague question"       # rewrite query via Claude Haiku before embedding
+memex serve                                 # start the MCP server (stdio) for AI coding agents
 ```
 
 `memex index` should be incremental — only embed files whose content has changed since
@@ -288,6 +292,7 @@ When you make any of the changes below, update CLAUDE.md **in the same commit**:
 |---|---|
 | New/removed/renamed `.py` in `memex/` | File structure section |
 | New/removed `@cli.command()` in `cli.py` | CLI behaviour section |
+| New/removed `@mcp.tool()` in `mcp_server.py` | File structure section |
 | `model=` string in `extractor.py` or `init.py` | Tech stack table + decisions section |
 | New dependency in `pyproject.toml` | Tech stack table |
 | New `os.environ["VAR"]` in `action.py` | Environment variables table |

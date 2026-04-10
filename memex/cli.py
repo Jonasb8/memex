@@ -371,6 +371,26 @@ def index(force, include_adrs):
 
 
 @cli.command()
+def serve():
+    """Start the MCP server (stdio transport) for AI coding agents.
+
+    Exposes three tools: memex_query, memex_get_decision, memex_list_recent.
+
+    \b
+    Configure in .mcp.json or claude_desktop_config.json:
+      {
+        "mcpServers": {
+          "memex": {"command": "memex", "args": ["serve"], "cwd": "/your/repo"}
+        }
+      }
+
+    Run `memex index` first so the server has an index to query.
+    """
+    from .mcp_server import mcp
+    mcp.run()
+
+
+@cli.command()
 @click.argument("query", nargs=-1)
 @click.option("--top", default=3, help="Number of results")
 @click.option(

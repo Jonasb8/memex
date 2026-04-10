@@ -3,3 +3,4 @@ memex/__pycache__/
 .env
 dist/
 tests/__pycache__/
+.mcp.json
