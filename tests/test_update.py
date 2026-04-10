@@ -16,6 +16,7 @@ from memex.update import (
     detect_repo,
     git_diff,
     git_files_changed,
+    git_changed_file_paths,
     git_log_since,
     load_state,
     save_state,
@@ -305,6 +306,7 @@ _DEFAULT_PR_DATA = {
     "author": {"login": "alice"},
     "url": "https://github.com/acme/repo/pull/42",
     "reviews": [],
+    "changed_files": [],
 }
 
 
@@ -393,7 +395,8 @@ def _make_direct_commit():
 
 
 def _call_process_direct(commit, indexed_sources=None, n_files=1,
-                          diff="some diff", is_low=False, extraction=None):
+                          diff="some diff", is_low=False, extraction=None,
+                          changed_file_paths=None):
     result = UpdateResult()
     if indexed_sources is None:
         indexed_sources = set()
@@ -403,7 +406,8 @@ def _call_process_direct(commit, indexed_sources=None, n_files=1,
     mock_write = MagicMock(return_value=Path("knowledge/decisions/foo.md"))
 
     with patch("memex.update.git_files_changed", return_value=n_files), \
-         patch("memex.update.git_diff", return_value=diff):
+         patch("memex.update.git_diff", return_value=diff), \
+         patch("memex.update.git_changed_file_paths", return_value=changed_file_paths or []):
         _process_direct_commit(
             commit=commit,
             sha_short=commit.sha[:8],
@@ -429,12 +433,35 @@ def test_process_direct_commit_already_indexed():
 
 def test_process_direct_commit_stat_filter():
     commit = _make_direct_commit()
+    # Non-structural files — stat filter applies
+    non_structural = [f"src/module_{i}.py" for i in range(MAX_FILES_CHANGED + 1)]
     result, mock_extract, mock_write = _call_process_direct(
-        commit, n_files=MAX_FILES_CHANGED + 1
+        commit, n_files=MAX_FILES_CHANGED + 1, changed_file_paths=non_structural
     )
     assert result.skipped_stat_filter == 1
     mock_extract.assert_not_called()
     mock_write.assert_not_called()
+
+
+def test_process_direct_commit_stat_filter_bypassed_for_structural():
+    commit = _make_direct_commit()
+    # Structural migration file rescues commit from stat filter
+    structural = ["migrations/001_add_sessions.py"] + [f"src/m_{i}.py" for i in range(12)]
+    result, mock_extract, _ = _call_process_direct(
+        commit, n_files=MAX_FILES_CHANGED + 3, changed_file_paths=structural
+    )
+    assert result.skipped_stat_filter == 0
+    mock_extract.assert_called_once()
+
+
+def test_process_direct_commit_stat_filter_non_structural_large():
+    commit = _make_direct_commit()
+    non_structural = [f"src/module_{i}.py" for i in range(20)]
+    result, mock_extract, _ = _call_process_direct(
+        commit, n_files=MAX_FILES_CHANGED + 10, changed_file_paths=non_structural
+    )
+    assert result.skipped_stat_filter == 1
+    mock_extract.assert_not_called()
 
 
 def test_process_direct_commit_empty_diff():

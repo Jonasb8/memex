@@ -67,14 +67,70 @@ def extract_confidence(content: str) -> float:
     return 1.0
 
 
+def _extract_md_section(content: str, header: str) -> str:
+    """Extract the body of a named ## section from markdown content."""
+    import re
+    pattern = rf"##\s+{re.escape(header)}\s*\n(.*?)(?=\n##\s|\n---|\Z)"
+    m = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def build_embed_text(content: str) -> str:
+    """Build a clean semantic string for embedding — strips YAML, warnings, and markdown noise."""
+    import re
+
+    def _bullets(text: str) -> list[str]:
+        items = []
+        for line in text.splitlines():
+            m = re.match(r"^\s*[-*]\s+(.+)", line)
+            if m:
+                item = m.group(1).strip()
+                if not item.startswith("_"):  # skip "_None recorded_" placeholders
+                    items.append(item)
+        return items
+
+    title = extract_title(content)
+    context = _extract_md_section(content, "Context")
+    decision = _extract_md_section(content, "Decision")
+    alts = _bullets(_extract_md_section(content, "Alternatives considered"))
+    constraints = _bullets(_extract_md_section(content, "Constraints"))
+
+    parts = [p for p in [title, context, decision] if p]
+    if alts:
+        parts.append("Alternatives: " + "; ".join(alts))
+    if constraints:
+        parts.append("Constraints: " + "; ".join(constraints))
+
+    return "\n".join(parts) if parts else content
+
+
 def extract_excerpt(content: str) -> str:
-    """Pull first substantive paragraph after the frontmatter."""
+    """Pull a human-readable preview from the Context and Decision sections."""
+    context = _extract_md_section(content, "Context")
+    decision = _extract_md_section(content, "Decision")
+
+    if context or decision:
+        if context:
+            # Truncate at a word boundary so we don't cut mid-word
+            if len(context) > 300:
+                context = context[:300].rsplit(None, 1)[0] + "…"
+        excerpt = context
+        if decision:
+            separator = " — " if excerpt else ""
+            excerpt += separator + decision  # decisions are one sentence — show in full
+        return excerpt
+
+    # Fallback: first non-blank, non-heading, non-blockquote line after frontmatter
     in_frontmatter = False
+    fm_count = 0
     for line in content.splitlines():
-        if line == "---":
-            in_frontmatter = not in_frontmatter
+        if line.strip() == "---":
+            fm_count += 1
+            in_frontmatter = fm_count < 2
             continue
-        if not in_frontmatter and line.strip() and not line.startswith("#"):
+        if in_frontmatter:
+            continue
+        if line.strip() and not line.startswith("#") and not line.startswith(">"):
             return line[:400]
     return ""
 
@@ -271,6 +327,8 @@ def index(force, include_adrs):
         click.echo("No knowledge records found. Is the GitHub Action installed?")
         return
 
+    import hashlib
+
     existing = load_index() if not force else {}
 
     disk_paths = {str(r) for r in records}
@@ -280,23 +338,32 @@ def index(force, include_adrs):
     if stale:
         click.echo(f"Removed {len(stale)} deleted record(s) from index.")
 
-    new_records = [r for r in records if str(r) not in existing]
+    to_index = []
+    for r in records:
+        content = r.read_text()
+        embed_text = build_embed_text(content)
+        h = hashlib.sha256(embed_text.encode()).hexdigest()
+        entry = existing.get(str(r))
+        if entry is None or entry.get("content_hash") != h:
+            to_index.append((r, content, embed_text, h))
 
-    if not new_records:
+    if not to_index:
+        if stale:
+            save_index(existing)
         click.echo(f"Index up to date — {len(existing)} records indexed.")
         return
 
-    click.echo(f"Indexing {len(new_records)} new records...")
-    contents = [r.read_text() for r in new_records]
-    embeddings = embed(contents)
+    click.echo(f"Indexing {len(to_index)} record(s)...")
+    embeddings = embed([embed_text for _, _, embed_text, _ in to_index])
 
-    for path, content, embedding in zip(new_records, contents, embeddings):
+    for (path, content, embed_text, h), embedding in zip(to_index, embeddings):
         existing[str(path)] = {
             "embedding": embedding,
             "title": extract_title(content),
             "excerpt": extract_excerpt(content),
             "confidence": extract_confidence(content),
             "path": str(path),
+            "content_hash": h,
         }
 
     save_index(existing)
@@ -306,7 +373,19 @@ def index(force, include_adrs):
 @cli.command()
 @click.argument("query", nargs=-1)
 @click.option("--top", default=3, help="Number of results")
-def query(query, top):
+@click.option(
+    "--min-score",
+    default=0.70,
+    show_default=True,
+    help="Minimum similarity score (0–1). Results below this are hidden.",
+)
+@click.option(
+    "--expand",
+    is_flag=True,
+    default=False,
+    help="Use Claude Haiku to rewrite query into richer search terms (adds ~1s latency).",
+)
+def query(query, top, min_score, expand):
     """Query your institutional knowledge.
 
     Example: memex query why did we move off MongoDB
@@ -321,6 +400,23 @@ def query(query, top):
         click.echo("Nothing indexed yet. Run `memex index` first.")
         return
 
+    if expand:
+        client = _anthropic_client()
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Rewrite this search query as 4-6 rich technical search phrases, "
+                    f"comma-separated, no explanation:\n\n{query_text}"
+                ),
+            }],
+        )
+        expanded = resp.content[0].text.strip()
+        query_text = expanded if expanded else query_text
+        click.echo(f"  Expanded: {query_text}", err=True)
+
     # Embed the query
     [query_embedding] = embed([query_text])
 
@@ -331,6 +427,9 @@ def query(query, top):
     ]
     scored.sort(key=lambda x: x[0], reverse=True)
 
+    passing = [(s, e) for s, e in scored if s >= min_score]
+    to_display = passing[:top]
+
     import shutil
     term_width = min(shutil.get_terminal_size((80, 24)).columns, 100)
     divider = "─" * term_width
@@ -338,7 +437,16 @@ def query(query, top):
     click.echo(f"\nResults for: {query_text}")
     click.echo(divider)
 
-    for i, (score, entry) in enumerate(scored[:top], 1):
+    if not to_display:
+        lower = round(max(0.0, min_score - 0.2), 1)
+        click.echo(
+            f"\n  No relevant results found (threshold: {min_score:.2f}).\n"
+            f'  Try `memex query --min-score {lower} "..."` to broaden the search.'
+        )
+        click.echo("")
+        return
+
+    for i, (score, entry) in enumerate(to_display, 1):
         title = entry["title"]
         excerpt = _strip_markdown(entry["excerpt"])
         path = entry["path"]
@@ -364,23 +472,23 @@ def query(query, top):
         rank = click.style(f"#{i}", bold=True)
         click.echo(f"\n  {rank}  {title}  {score_label}")
 
-        # Confidence label
+        # Confidence label — reflects quality of rationale in the source record,
+        # independent of the similarity score above.
         if confidence >= 0.80:
-            conf_line = click.style("✅ High confidence", fg="green")
+            conf_line = click.style("✅ Rationale: well-documented", fg="green")
             click.echo(f"      {conf_line}")
         elif confidence >= 0.65:
-            conf_line = click.style("💡 Medium confidence", fg="yellow")
+            conf_line = click.style("💡 Rationale: partial — verify if critical", fg="yellow")
             click.echo(f"      {conf_line}")
         else:
             conf_line = click.style(
-                "⚠️  Low confidence — limited rationale present in source. "
-                "Verify before relying on this record.",
+                "⚠️  Rationale: limited — limited reasoning in source, verify before relying on this record.",
                 fg="yellow",
             )
             click.echo(f"      {conf_line}")
 
-        # Excerpt — skip if it duplicates the low-confidence warning already shown
-        if excerpt and not excerpt.startswith("⚠️"):
+        # Excerpt
+        if excerpt:
             click.echo(_wrap(excerpt, term_width - 6, "      "))
 
         click.echo(f"      {click.style(path, dim=True)}")

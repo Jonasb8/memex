@@ -254,3 +254,60 @@ class TestMainDispatch:
             from memex.action import main
             main()
         mock_merge.assert_called_once()
+
+
+# --- changed_files wiring ---
+
+class TestChangedFilesWiring:
+    def test_changed_files_passed_to_extract(self, tmp_path, monkeypatch):
+        """changed_files from get_changed_files() should be forwarded to extract()."""
+        monkeypatch.chdir(tmp_path)
+        for k, v in BASE_ENV.items():
+            monkeypatch.setenv(k, v)
+
+        structural_files = ["migrations/001_add_sessions.py"]
+
+        with patch("memex.action.get_review_comments", return_value=[]), \
+             patch("memex.action.get_changed_files", return_value=structural_files), \
+             patch("memex.action.extract", return_value=_make_result(0.85)) as mock_extract, \
+             patch("memex.action.write_record", return_value=Path("knowledge/decisions/foo.md")):
+
+            from memex.action import handle_pr_merge
+            handle_pr_merge()
+
+        mock_extract.assert_called_once()
+        assert mock_extract.call_args.kwargs.get("changed_files") == structural_files
+
+    def test_structural_tags_written_for_migration_pr(self, tmp_path, monkeypatch):
+        """Structural tags derived from changed_files should reach write_record."""
+        monkeypatch.chdir(tmp_path)
+        for k, v in BASE_ENV.items():
+            monkeypatch.setenv(k, v)
+
+        with patch("memex.action.get_review_comments", return_value=[]), \
+             patch("memex.action.get_changed_files", return_value=["migrations/001_add_sessions.py"]), \
+             patch("memex.action.extract", return_value=_make_result(0.85)), \
+             patch("memex.action.write_record", return_value=Path("knowledge/decisions/foo.md")) as mock_write:
+
+            from memex.action import handle_pr_merge
+            handle_pr_merge()
+
+        _, kwargs = mock_write.call_args
+        assert "migration" in (kwargs.get("tags") or [])
+
+    def test_no_structural_tags_for_plain_pr(self, tmp_path, monkeypatch):
+        """Non-structural files should produce no structural tags."""
+        monkeypatch.chdir(tmp_path)
+        for k, v in BASE_ENV.items():
+            monkeypatch.setenv(k, v)
+
+        with patch("memex.action.get_review_comments", return_value=[]), \
+             patch("memex.action.get_changed_files", return_value=["src/auth.py", "tests/test_auth.py"]), \
+             patch("memex.action.extract", return_value=_make_result(0.85)), \
+             patch("memex.action.write_record", return_value=Path("knowledge/decisions/foo.md")) as mock_write:
+
+            from memex.action import handle_pr_merge
+            handle_pr_merge()
+
+        _, kwargs = mock_write.call_args
+        assert kwargs.get("tags") is None

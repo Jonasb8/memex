@@ -4,6 +4,7 @@ from anthropic import Anthropic
 import instructor
 from .config import load_api_key
 from .schema import ExtractionResult, ConfidenceLevel
+from .structural import categorize_file, is_structural_change, build_changed_files_section
 
 
 def _client():
@@ -27,11 +28,15 @@ _TITLE_LOW_SIGNAL = [
 _BODY_TRIVIAL_THRESHOLD = 80  # chars — below this, treat body as absent
 
 
-def is_low_signal(title: str, body: str) -> bool:
+def is_low_signal(title: str, body: str, changed_files: list[str] | None = None) -> bool:
     """Quick heuristic check before spending an LLM call."""
     text = f"{title}\n{body}"
+    # Always-low patterns win regardless of structural files (dep bumps are always noise)
     if any(re.search(p, text, re.IGNORECASE) for p in _ALWAYS_LOW_SIGNAL):
         return True
+    # Structural files override the title-based heuristics
+    if changed_files and is_structural_change(changed_files):
+        return False
     body_is_trivial = len((body or "").strip()) < _BODY_TRIVIAL_THRESHOLD
     if body_is_trivial:
         if any(re.search(p, title, re.IGNORECASE) for p in _TITLE_LOW_SIGNAL):
@@ -39,18 +44,24 @@ def is_low_signal(title: str, body: str) -> bool:
     return False
 
 
-def build_prompt(pr_title: str, pr_body: str, review_comments: list[str]) -> str:
+def build_prompt(
+    pr_title: str,
+    pr_body: str,
+    review_comments: list[str],
+    changed_files: list[str] | None = None,
+) -> str:
     reviews_text = "\n---\n".join(review_comments) if review_comments else "No review comments."
+    changed_files_section = build_changed_files_section(changed_files)
     return f"""You are extracting institutional knowledge from a GitHub pull request.
 
-Your task: determine whether this PR contains a genuine architectural, technical, or 
+Your task: determine whether this PR contains a genuine architectural, technical, or
 product decision — and if so, extract the decision context.
 
-A genuine decision involves a non-obvious choice between alternatives, a trade-off, 
-or a constraint that shaped how something was built. Routine changes (dependency 
+A genuine decision involves a non-obvious choice between alternatives, a trade-off,
+or a constraint that shaped how something was built. Routine changes (dependency
 updates, typo fixes, style cleanup, test additions) do NOT qualify.
 
-Be strict. It is better to return contains_decision=false than to manufacture 
+Be strict. It is better to return contains_decision=false than to manufacture
 rationale that isn't actually present in the text.
 
 ## PR Title
@@ -62,7 +73,16 @@ rationale that isn't actually present in the text.
 ## Review Comments
 {reviews_text}
 
-Extract the decision context now. Set confidence based on how much explicit rationale 
+## Changed Files
+{changed_files_section}
+
+If changed files include migrations, infrastructure-as-code, or schema definitions, \
+these represent architectural decisions worth capturing even when the PR description is thin. \
+Extract the decision (what changed and why it matters structurally), but set confidence \
+based on how much explicit rationale is actually present in the text — do not infer \
+motivation that is not stated.
+
+Extract the decision context now. Set confidence based on how much explicit rationale
 is actually present in the text above — do not infer or assume."""
 
 
@@ -70,6 +90,7 @@ def extract(
     pr_title: str,
     pr_body: str,
     review_comments: list[str] | None = None,
+    changed_files: list[str] | None = None,
 ) -> ExtractionResult | None:
     """
     Run the extraction pipeline on a single PR.
@@ -79,18 +100,18 @@ def extract(
     """
     review_comments = review_comments or []
 
-    # Gate 1: cheap heuristic filter
-    if is_low_signal(pr_title, pr_body or ""):
+    # Gate 1: cheap heuristic filter (changed_files enables structural override)
+    if is_low_signal(pr_title, pr_body or "", changed_files):
         return None
 
     # Gate 2: LLM extraction with structured output
     result: ExtractionResult = _client().messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[
             {
                 "role": "user",
-                "content": build_prompt(pr_title, pr_body, review_comments),
+                "content": build_prompt(pr_title, pr_body, review_comments, changed_files),
             }
         ],
         response_model=ExtractionResult,
