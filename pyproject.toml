@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memex-oss"
-version = "0.3.0"
+version = "0.3.1"
 description = "Institutional knowledge extraction for engineering teams"
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
 authors = [{ name = "Memex Contributors" }]
-keywords = ["knowledge-management", "github-actions", "adr", "engineering"]
+keywords = ["knowledge-management", "github-actions", "adr", "engineering", "llm", "mcp", "developer-tools", "institutional-knowledge"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -33,6 +33,12 @@ dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.14.0",
 ]
+
+[project.urls]
+Homepage = "https://trymemex.dev"
+Repository = "https://github.com/Jonasb8/memex"
+"Bug Tracker" = "https://github.com/Jonasb8/memex/issues"
+Changelog = "https://github.com/Jonasb8/memex/releases"
 
 [project.scripts]
 memex = "memex.cli:cli"
