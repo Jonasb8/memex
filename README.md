@@ -25,6 +25,10 @@ Results for: why did we move off MongoDB
   #2  ...
 ```
 
+Or, surfaced automatically by an AI coding agent before it suggests an architecture change:
+
+![Cursor using memex_query to surface a past decision before suggesting an architecture change](memex_cursor_landing.html.png)
+
 ---
 
 ## How it works
