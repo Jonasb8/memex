@@ -1,8 +1,14 @@
 # Memex
 
-Memex extracts and indexes the institutional knowledge buried in your GitHub pull requests, review threads, and ADRs — automatically, without changing how your team works.
+[![PyPI](https://img.shields.io/pypi/v/memex-oss)](https://pypi.org/project/memex-oss/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://pypi.org/project/memex-oss/)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-Engineers don't write anything new. Memex hooks into the artifacts that already exist and makes them searchable.
+**[trymemex.dev](https://trymemex.dev)** · [PyPI](https://pypi.org/project/memex-oss/)
+
+Most architectural decisions are never written down. They live in a three-minute hallway conversation, a Slack thread that gets deleted, or a pull request where every review is just "LGTM".
+
+Memex captures decisions at the moment they're made — extracting structured rationale from the GitHub artifacts that already exist (PRs, review threads, ADRs) without asking engineers to change how they work.
 
 ```bash
 $ memex query "why did we move off MongoDB"

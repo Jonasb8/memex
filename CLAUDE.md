@@ -141,7 +141,7 @@ When a PR merges, `action.py` runs this sequence:
    If true → exit 0, log "low-signal PR skipped"
 6. Call `extract(title, body, review_comments)` — Instructor + Claude Sonnet
 7. If `contains_decision` is False → exit 0 silently
-7b. If `contains_decision` is True but `confidence < 0.65` → discard silently
+7b. If `contains_decision` is True but `confidence < 0.40` → discard silently
 8. If `contains_decision` is True:
    - Scan PR body + review comments for `ADR-NNN` patterns; glob matching knowledge records
      into a `related` list

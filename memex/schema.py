@@ -6,7 +6,7 @@ from enum import Enum
 class ConfidenceLevel(str, Enum):
     high = "high"       # >= 0.80 — publish
     medium = "medium"   # 0.65–0.80 — publish with flag
-    low = "low"         # < 0.65 — discard
+    low = "low"         # < 0.65 — publish with ⚠️ flag
 
 
 class KnowledgeRecord(BaseModel):
